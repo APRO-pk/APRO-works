@@ -15,8 +15,24 @@ const LAUNCH_TICKET_TTL: Duration = Duration::from_secs(90);
 #[derive(Serialize)]
 struct ProductStatus {
     installed: bool,
+    update_available: bool,
     install_dir: String,
     executable_path: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ProductInstallReceipt {
+    source_url: String,
+    etag: Option<String>,
+    last_modified: Option<String>,
+    content_length: Option<u64>,
+}
+
+#[derive(Clone)]
+struct RemoteArchiveSignature {
+    etag: Option<String>,
+    last_modified: Option<String>,
+    content_length: Option<u64>,
 }
 
 #[derive(Clone, Serialize)]
@@ -50,6 +66,10 @@ fn product_install_dir(slug: &str) -> Result<PathBuf, String> {
 
 fn product_executable_path(slug: &str, exe_path: &str) -> Result<PathBuf, String> {
     Ok(product_install_dir(slug)?.join(Path::new(exe_path)))
+}
+
+fn product_receipt_path(slug: &str) -> Result<PathBuf, String> {
+    Ok(product_install_dir(slug)?.join(".apro-install.json"))
 }
 
 fn current_epoch_millis() -> Result<u128, String> {
@@ -133,6 +153,71 @@ fn resolve_download_response(client: &Client, url: &str) -> Result<Response, Str
         .map_err(|err| format!("Failed to download product archive: {err}"))?
         .error_for_status()
         .map_err(|err| format!("Failed to download product archive: {err}"))
+}
+
+fn response_signature(response: &Response) -> RemoteArchiveSignature {
+    let headers = response.headers();
+    RemoteArchiveSignature {
+        etag: headers
+            .get(reqwest::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.to_string()),
+        last_modified: headers
+            .get(reqwest::header::LAST_MODIFIED)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.to_string()),
+        content_length: response.content_length(),
+    }
+}
+
+fn resolve_remote_archive_signature(client: &Client, url: &str) -> Result<RemoteArchiveSignature, String> {
+    if url.contains("mediafire.com/file/") {
+        let html = client
+            .get(url)
+            .send()
+            .map_err(|err| format!("Failed to open MediaFire share link: {err}"))?
+            .error_for_status()
+            .map_err(|err| format!("Failed to open MediaFire share link: {err}"))?
+            .text()
+            .map_err(|err| format!("Failed to read MediaFire page: {err}"))?;
+
+        let download_url = extract_mediafire_download_url(&html)
+            .ok_or("Unable to resolve MediaFire download link from the shared page.")?;
+
+        let response = client
+            .head(&download_url)
+            .send()
+            .map_err(|err| format!("Failed to inspect MediaFire file: {err}"))?
+            .error_for_status()
+            .map_err(|err| format!("Failed to inspect MediaFire file: {err}"))?;
+
+        return Ok(response_signature(&response));
+    }
+
+    let response = client
+        .head(url)
+        .send()
+        .map_err(|err| format!("Failed to inspect product archive: {err}"))?
+        .error_for_status()
+        .map_err(|err| format!("Failed to inspect product archive: {err}"))?;
+
+    Ok(response_signature(&response))
+}
+
+fn signatures_match(local: &ProductInstallReceipt, remote: &RemoteArchiveSignature) -> bool {
+    if let (Some(local_etag), Some(remote_etag)) = (&local.etag, &remote.etag) {
+        return local_etag == remote_etag;
+    }
+
+    if let (Some(local_modified), Some(remote_modified)) = (&local.last_modified, &remote.last_modified) {
+        return local_modified == remote_modified;
+    }
+
+    if let (Some(local_size), Some(remote_size)) = (local.content_length, remote.content_length) {
+        return local_size == remote_size;
+    }
+
+    false
 }
 
 fn cleanup_expired_launch_tickets() -> Result<(), String> {
@@ -274,12 +359,32 @@ fn extract_product_archive_with_progress(
     Ok(())
 }
 
-fn get_product_status_sync(slug: String, exe_path: String) -> Result<ProductStatus, String> {
+fn get_product_status_sync(slug: String, url: String, exe_path: String) -> Result<ProductStatus, String> {
     let install_dir = product_install_dir(&slug)?;
     let executable_path = product_executable_path(&slug, &exe_path)?;
+    let installed = executable_path.exists();
+    let mut update_available = false;
+
+    if installed {
+        let receipt_path = product_receipt_path(&slug)?;
+        if let Ok(contents) = fs::read_to_string(&receipt_path) {
+            if let Ok(receipt) = serde_json::from_str::<ProductInstallReceipt>(&contents) {
+                if let Ok(client) = download_client() {
+                    if let Ok(remote) = resolve_remote_archive_signature(&client, &url) {
+                        update_available = !signatures_match(&receipt, &remote);
+                    }
+                }
+            } else {
+                update_available = true;
+            }
+        } else {
+            update_available = true;
+        }
+    }
 
     Ok(ProductStatus {
-        installed: executable_path.exists(),
+        installed,
+        update_available,
         install_dir: install_dir.to_string_lossy().to_string(),
         executable_path: executable_path.to_string_lossy().to_string(),
     })
@@ -305,6 +410,7 @@ fn install_product_sync(app: AppHandle, slug: String, url: String, exe_path: Str
 
     let client = download_client()?;
     let mut response = resolve_download_response(&client, &url)?;
+    let archive_signature = response_signature(&response);
 
     let total_size = response.content_length();
     let mut bytes = Vec::new();
@@ -373,6 +479,18 @@ fn install_product_sync(app: AppHandle, slug: String, url: String, exe_path: Str
         ));
     }
 
+    let receipt = ProductInstallReceipt {
+        source_url: url,
+        etag: archive_signature.etag,
+        last_modified: archive_signature.last_modified,
+        content_length: archive_signature.content_length,
+    };
+    let receipt_path = product_receipt_path(&slug)?;
+    let receipt_contents =
+        serde_json::to_vec_pretty(&receipt).map_err(|err| format!("Failed to serialize install receipt: {err}"))?;
+    fs::write(&receipt_path, receipt_contents)
+        .map_err(|err| format!("Failed to write install receipt: {err}"))?;
+
     emit_progress(
         &app,
         ProductProgress {
@@ -385,6 +503,7 @@ fn install_product_sync(app: AppHandle, slug: String, url: String, exe_path: Str
 
     Ok(ProductStatus {
         installed: true,
+        update_available: false,
         install_dir: install_dir.to_string_lossy().to_string(),
         executable_path: executable_path.to_string_lossy().to_string(),
     })
@@ -443,14 +562,15 @@ fn uninstall_product_sync(app: AppHandle, slug: String, exe_path: String) -> Res
 
     Ok(ProductStatus {
         installed: false,
+        update_available: false,
         install_dir: install_dir.to_string_lossy().to_string(),
         executable_path: executable_path.to_string_lossy().to_string(),
     })
 }
 
 #[tauri::command]
-async fn get_product_status(slug: String, exe_path: String) -> Result<ProductStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || get_product_status_sync(slug, exe_path))
+async fn get_product_status(slug: String, url: String, exe_path: String) -> Result<ProductStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || get_product_status_sync(slug, url, exe_path))
         .await
         .map_err(|err| format!("Failed to check product status: {err}"))?
 }

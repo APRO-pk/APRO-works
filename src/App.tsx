@@ -12,7 +12,7 @@ import {
 import { supabase } from "./lib/supabase";
 import burnBackground from "./assets/burnAndGeometry.png";
 import hexadofBackground from "./assets/hexadof.png";
-import logo from "./assets/logo.png";
+import logo from "../src-tauri/icons/icon.png";
 import propulsorBackground from "./assets/propulsor.png";
 import geometryIcon from "../../Icons/PNG/GeometryModeler.png";
 import hexadofIcon from "../../Icons/PNG/HexadofForLight.png";
@@ -55,6 +55,7 @@ type ProductDefinition = {
 
 type ProductStatus = {
   installed: boolean;
+  update_available: boolean;
   install_dir: string;
   executable_path: string;
 };
@@ -261,17 +262,12 @@ function LoginScreen({
                 <img src={logo} alt="" className="h-9 w-auto object-contain opacity-95" />
               </div>
               <div>
-                <p className="text-[0.68rem] uppercase tracking-[0.34em] text-[#95a8d8]/62">Member access</p>
-                <h1 className="mt-1 text-[2.4rem] font-semibold leading-none tracking-tight text-white">Sign In</h1>
+                <h1 className="text-[2.4rem] font-semibold leading-none tracking-tight text-white">Sign In</h1>
               </div>
             </div>
 
-            <p className="mt-5 max-w-[24rem] text-sm leading-7 text-white/56">
-              Login with your APRO member account. Access is limited to approved members, matching the current website flow.
-            </p>
-
             <form
-              className="mt-8 space-y-4"
+              className="mt-7 space-y-4"
               onSubmit={(event) => {
                 event.preventDefault();
                 onSubmit();
@@ -318,22 +314,6 @@ function LoginScreen({
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-function MenuStrip() {
-  return (
-    <div className="panel-menubar mt-2 flex h-8 items-center gap-5 rounded-[16px] px-4">
-      {["File", "Edit", "View", "Workspace", "Help"].map((item) => (
-        <button
-          key={item}
-          type="button"
-          className="text-[0.72rem] font-medium tracking-[0.08em] text-white/52 transition hover:text-white/86"
-        >
-          {item}
-        </button>
-      ))}
     </div>
   );
 }
@@ -550,7 +530,7 @@ function SectionHeader({
     <section className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
       <div className="max-w-[42rem]">
         <p className="text-[0.68rem] uppercase tracking-[0.34em] text-[#95a8d8]/62">{eyebrow}</p>
-        <h2 className="mt-2 text-[clamp(2.6rem,4vw,4.1rem)] font-semibold leading-[0.95] tracking-tight text-white">
+        <h2 className="mt-2 text-[clamp(2rem,3vw,3.15rem)] font-semibold leading-[0.98] tracking-tight text-white">
           {title}
         </h2>
         {subtitle ? <p className="mt-3 max-w-[34rem] text-[0.95rem] leading-7 text-white/52">{subtitle}</p> : null}
@@ -569,12 +549,14 @@ function SectionHeader({
 function ProductCard({
   product,
   installed,
+  updateAvailable,
   busy,
   onPrimaryAction,
   onSecondaryAction,
 }: {
   product: ProductDefinition;
   installed: boolean;
+  updateAvailable: boolean;
   busy: boolean;
   onPrimaryAction: () => void;
   onSecondaryAction?: () => void;
@@ -592,82 +574,85 @@ function ProductCard({
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(125,154,242,0.18),transparent_22%),radial-gradient(circle_at_bottom_right,rgba(117,149,245,0.12),transparent_24%)] opacity-90" />
       <div className="panel-grain absolute inset-0 opacity-55" />
 
-      <div className="relative flex h-full min-h-[318px] flex-col justify-between p-5">
+      <div className="relative flex h-full min-h-[318px] flex-col p-5">
         <div className="flex items-start justify-between gap-4">
-          <span className="panel-chip rounded-full px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-white/68">
+          <span className="rounded-full border border-white/10 bg-transparent px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-white/68">
             {product.eyebrow}
           </span>
           <span
-            className={`rounded-full px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.24em] ${
-              installed ? "pill-installed" : "pill-available"
+            className={`rounded-full border border-white/10 bg-transparent px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.24em] ${
+              updateAvailable ? "pill-update" : installed ? "pill-installed" : "pill-available"
             }`}
           >
-            {installed ? "Installed" : "Available"}
+            {updateAvailable ? "Update" : installed ? "Installed" : "Available"}
           </span>
         </div>
 
-        <div className={`max-w-[21rem] pt-3 ${product.contentClassName ?? ""}`}>
+        <div className={`flex flex-1 flex-col items-center justify-center pt-4 text-center ${product.contentClassName ?? ""}`}>
           <div
-            className={`panel-icon mb-5 flex h-17 w-17 items-center justify-center rounded-[21px] p-3 transition duration-500 group-hover:scale-[1.06] ${
+            className={`mb-5 flex h-17 w-17 items-center justify-center transition duration-500 group-hover:scale-[1.06] ${
               product.iconClassName ?? ""
             }`}
           >
             <img src={product.iconImage} alt="" className="max-h-full w-auto object-contain" />
           </div>
-            <h3
-              className={`max-w-[11ch] text-[2rem] font-semibold leading-[0.95] tracking-tight text-white drop-shadow-[0_10px_20px_rgba(0,0,0,0.45)] ${
-                product.titleClassName ?? ""
-              }`}
-            >
-              {product.titleLines ? (
-                product.titleLines.map((line, index) => (
-                  <span key={`${product.slug}-line-${index}`} className="block whitespace-nowrap">
-                    {line}
-                  </span>
-                ))
-              ) : (
-                product.name
-              )}
-            </h3>
-          <p
-            className={`mt-3 max-w-[19rem] text-sm leading-6 text-white/74 drop-shadow-[0_6px_16px_rgba(0,0,0,0.35)] ${
-              product.descriptionClassName ?? ""
+          <h3
+            className={`max-w-[13ch] text-[1.58rem] font-semibold leading-[0.98] tracking-tight text-white drop-shadow-[0_10px_20px_rgba(0,0,0,0.45)] ${
+              product.titleClassName ?? ""
             }`}
           >
-            {product.description}
-          </p>
-        </div>
-
-        <div className="panel-tray flex items-center justify-between gap-3 rounded-[24px] px-4 py-4">
-          <div className="min-w-0">
-            <p className="text-[0.68rem] uppercase tracking-[0.24em] text-white/34">Command</p>
-            <p className="mt-1 text-sm text-white/72">
-              {installed ? "Open through APRO Works" : "Install this workspace locally"}
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
+            {product.titleLines ? (
+              product.titleLines.map((line, index) => (
+                <span key={`${product.slug}-line-${index}`} className="block whitespace-nowrap">
+                  {line}
+                </span>
+              ))
+            ) : (
+              product.name
+            )}
+          </h3>
+          <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
             {installed && onSecondaryAction ? (
               <button
                 type="button"
                 onClick={onSecondaryAction}
                 disabled={busy}
-                className="control-secondary rounded-[999px] px-4 py-2.5 text-sm font-semibold text-white/78 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                className="control-glass control-secondary control-clear rounded-[999px] px-5 py-2.5 text-sm font-semibold text-white/78 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Uninstall
               </button>
             ) : null}
-            <button
-              type="button"
-              onClick={onPrimaryAction}
-              disabled={busy}
-              className="control-primary rounded-[999px] px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {busy ? "Working..." : installed ? "Launch" : "Install"}
-            </button>
+              <button
+                type="button"
+                onClick={onPrimaryAction}
+                disabled={busy}
+                className="control-glass control-clear rounded-[999px] px-5 py-2.5 text-sm font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {busy ? "Working..." : updateAvailable ? "Update" : installed ? "Launch" : "Install"}
+              </button>
           </div>
         </div>
       </div>
     </article>
+  );
+}
+
+function LaunchOverlay({
+  productName,
+}: {
+  productName: string;
+}) {
+  return (
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-[rgba(7,10,16,0.48)] backdrop-blur-[6px]">
+      <div className="panel-shell w-full max-w-[420px] rounded-[30px] px-8 py-8 text-center shadow-[0_28px_90px_rgba(0,0,0,0.34)]">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-white/12 bg-white/[0.04]">
+          <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/18 border-t-[#aac3ff]" />
+        </div>
+        <p className="mt-5 text-[0.72rem] uppercase tracking-[0.32em] text-white/42">Launching</p>
+        <h3 className="mt-3 text-[1.75rem] font-semibold tracking-tight text-white">{productName}</h3>
+        <p className="mt-3 text-sm leading-6 text-white/56">Preparing the workspace window and handing control to the product.</p>
+      </div>
+    </div>
   );
 }
 
@@ -791,9 +776,7 @@ function SettingsPanel({
         <div className="panel-inset rounded-[26px] px-5 py-5">
           <p className="text-[0.72rem] uppercase tracking-[0.28em] text-white/38">Account</p>
           <h3 className="mt-3 text-3xl font-semibold tracking-tight text-white">{member.full_name ?? member.email ?? "APRO member"}</h3>
-          <p className="mt-4 max-w-[34rem] text-sm leading-7 text-white/58">
-            Signed in through the current APRO website member flow. Your launcher session will remain available locally until you sign out.
-          </p>
+          <p className="mt-4 max-w-[34rem] text-sm leading-7 text-white/58">Manage your APRO Works account session.</p>
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <span className="panel-chip rounded-full px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-white/68">
               {member.account_status}
@@ -812,15 +795,11 @@ function SettingsPanel({
         <div className="grid gap-3">
           <div className="panel-raised rounded-[24px] px-4 py-4">
             <p className="text-[0.68rem] uppercase tracking-[0.22em] text-white/38">Session</p>
-            <p className="mt-2 text-sm text-white/72">Supabase auth session is restored automatically when APRO Works starts.</p>
+            <p className="mt-2 text-sm text-white/72">Your sign-in session is restored automatically when APRO Works starts.</p>
           </div>
           <div className="panel-raised rounded-[24px] px-4 py-4">
-            <p className="text-[0.68rem] uppercase tracking-[0.22em] text-white/38">Member gate</p>
-            <p className="mt-2 text-sm text-white/72">Only approved members are allowed into the desktop launcher right now.</p>
-          </div>
-          <div className="panel-raised rounded-[24px] px-4 py-4">
-            <p className="text-[0.68rem] uppercase tracking-[0.22em] text-white/38">Next step</p>
-            <p className="mt-2 text-sm text-white/72">Product ownership and launch-token validation can now build on top of this auth layer.</p>
+            <p className="text-[0.68rem] uppercase tracking-[0.22em] text-white/38">Access</p>
+            <p className="mt-2 text-sm text-white/72">Only approved members can open APRO Works.</p>
           </div>
         </div>
       </div>
@@ -848,6 +827,7 @@ function App() {
   const [statusMessage, setStatusMessage] = useState("Checking local install state...");
   const [errorMessage, setErrorMessage] = useState("");
   const [downloadHistory, setDownloadHistory] = useState<DownloadHistoryItem[]>([]);
+  const [launchOverlayProduct, setLaunchOverlayProduct] = useState<string | null>(null);
   const [snackbar, setSnackbar] = useState<SnackbarState>({
     visible: false,
     title: "",
@@ -897,6 +877,7 @@ function App() {
         products.map(async (product) => {
           const status = await invoke<ProductStatus>("get_product_status", {
             slug: product.slug,
+            url: product.archiveUrl,
             exePath: product.executablePath,
           });
           return [product.slug, status] as const;
@@ -1145,20 +1126,24 @@ function App() {
     setActiveProductSlug(product.slug);
 
     try {
-      if (currentStatus?.installed) {
+      if (currentStatus?.installed && !currentStatus.update_available) {
         setDownloadStage("launching");
         setDownloadProgress(100);
         setStatusMessage(`Launching ${product.name}...`);
+        setLaunchOverlayProduct(product.name);
         await invoke("launch_product", {
           slug: product.slug,
           exePath: product.executablePath,
         });
+        await new Promise((resolve) => window.setTimeout(resolve, 900));
         setDownloadStage("ready");
         setStatusMessage("Launch command sent successfully.");
       } else {
         setDownloadStage("downloading");
         setDownloadProgress(0);
-        setStatusMessage(`Downloading ${product.name}...`);
+        setStatusMessage(
+          currentStatus?.update_available ? `Updating ${product.name}...` : `Downloading ${product.name}...`,
+        );
         setActiveSection("downloads");
 
         const status = await invoke<ProductStatus>("install_product", {
@@ -1173,11 +1158,15 @@ function App() {
         }));
         setDownloadStage("ready");
         setDownloadProgress(100);
-        setStatusMessage(`Install completed. ${product.name} is ready.`);
+        setStatusMessage(
+          currentStatus?.update_available
+            ? `Update completed. ${product.name} is ready.`
+            : `Install completed. ${product.name} is ready.`,
+        );
         setDownloadHistory((current) => [
           {
             id: `${product.slug}-${Date.now()}`,
-            title: "Install completed",
+            title: currentStatus?.update_available ? "Update completed" : "Install completed",
             detail: `${product.name} is ready to launch.`,
             tone: "success",
           },
@@ -1189,17 +1178,18 @@ function App() {
       setActiveSection("downloads");
       setDownloadStage("error");
       setErrorMessage(detail);
-      setStatusMessage(`Unable to install ${product.name}.`);
+      setStatusMessage(currentStatus?.update_available ? `Unable to update ${product.name}.` : `Unable to install ${product.name}.`);
       setDownloadHistory((current) => [
         {
           id: `${product.slug}-error-${Date.now()}`,
-          title: "Download failed",
+          title: currentStatus?.update_available ? "Update failed" : "Download failed",
           detail: `${product.name}: ${detail}`,
           tone: "error",
         },
         ...current,
       ]);
     } finally {
+      setLaunchOverlayProduct(null);
       setBusy(false);
     }
   }
@@ -1310,9 +1300,7 @@ function App() {
           </div>
           <WindowControls />
         </header>
-        <MenuStrip />
-
-        <div className="mt-2 flex h-[calc(100%-5.8rem)] min-h-0 gap-3">
+        <div className="mt-2 flex h-[calc(100%-3.75rem)] min-h-0 gap-3">
           <aside className="panel-shell flex w-[278px] min-w-[278px] flex-col rounded-[30px] p-5">
             <AproLogo />
 
@@ -1397,7 +1385,8 @@ function App() {
                             key={product.slug}
                             product={product}
                             installed={Boolean(productStatuses[product.slug]?.installed)}
-                            busy={busy}
+                            updateAvailable={Boolean(productStatuses[product.slug]?.update_available)}
+                            busy={busy && activeProductSlug === product.slug}
                             onPrimaryAction={() => void handleProductAction(product)}
                             onSecondaryAction={
                               productStatuses[product.slug]?.installed ? () => void handleUninstallProduct(product) : undefined
@@ -1420,7 +1409,8 @@ function App() {
                             key={product.slug}
                             product={product}
                             installed
-                            busy={busy}
+                            updateAvailable={Boolean(productStatuses[product.slug]?.update_available)}
+                            busy={busy && activeProductSlug === product.slug}
                             onPrimaryAction={() => void handleProductAction(product)}
                             onSecondaryAction={() => void handleUninstallProduct(product)}
                           />
@@ -1454,6 +1444,7 @@ function App() {
             </div>
           </main>
         </div>
+        {launchOverlayProduct ? <LaunchOverlay productName={launchOverlayProduct} /> : null}
       </div>
 
       {snackbar.visible ? (

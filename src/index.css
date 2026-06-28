@@ -395,19 +395,20 @@ input {
 }
 
 .pill-installed {
-  background: linear-gradient(180deg, rgba(82, 57, 34, 0.92), rgba(46, 32, 22, 0.94));
-  border: 1px solid rgba(255, 181, 120, 0.22);
   color: #efcfaa;
 }
 
 .pill-available {
-  background: linear-gradient(180deg, rgba(25, 44, 39, 0.9), rgba(17, 30, 27, 0.94));
-  border: 1px solid rgba(137, 255, 196, 0.18);
   color: #b6f1d5;
+}
+
+.pill-update {
+  color: #cbbcff;
 }
 
 .control-primary {
   background: linear-gradient(180deg, #bbd2ff, #9fc0ff);
+  border: 1px solid rgba(220, 233, 255, 0.3);
   box-shadow:
     0 8px 14px rgba(106, 143, 255, 0.22),
     inset 0 1px 0 rgba(255, 255, 255, 0.42),
@@ -419,7 +420,7 @@ input {
 .control-secondary {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)),
-    rgba(13, 18, 28, 0.94);
+    rgba(20, 27, 41, 0.48);
   border: 1px solid rgba(255, 255, 255, 0.09);
   box-shadow:
     inset 1px 1px 0 rgba(255, 255, 255, 0.045),
@@ -434,6 +435,62 @@ input {
     inset -2px -2px 0 rgba(0, 0, 0, 0.24),
     inset 0 -8px 12px rgba(0, 0, 0, 0.2),
     0 10px 18px rgba(0, 0, 0, 0.16);
+}
+
+.control-glass {
+  position: relative;
+  overflow: hidden;
+  backdrop-filter: blur(18px) saturate(155%);
+  -webkit-backdrop-filter: blur(18px) saturate(155%);
+}
+
+.control-clear {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.03) 44%, rgba(255, 255, 255, 0.01)),
+    linear-gradient(135deg, rgba(178, 205, 255, 0.14), rgba(255, 255, 255, 0.02) 42%, rgba(78, 102, 150, 0.08)),
+    rgba(17, 24, 36, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 -10px 14px rgba(0, 0, 0, 0.12),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.06),
+    0 10px 18px rgba(0, 0, 0, 0.1);
+}
+
+.control-clear:hover {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.04) 44%, rgba(255, 255, 255, 0.015)),
+    linear-gradient(135deg, rgba(190, 215, 255, 0.18), rgba(255, 255, 255, 0.03) 42%, rgba(82, 108, 160, 0.1)),
+    rgba(17, 24, 36, 0.2);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -10px 14px rgba(0, 0, 0, 0.14),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.08),
+    0 12px 20px rgba(0, 0, 0, 0.12);
+}
+
+.control-glass::before {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.06) 32%, transparent 55%),
+    radial-gradient(circle at 18% 22%, rgba(255, 255, 255, 0.16), transparent 34%),
+    radial-gradient(circle at 82% 78%, rgba(255, 255, 255, 0.08), transparent 28%);
+  opacity: 0.92;
+  pointer-events: none;
+}
+
+.control-glass::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+    inset -10px -12px 16px rgba(36, 46, 68, 0.14);
+  pointer-events: none;
 }
 
 .progress-fill {
