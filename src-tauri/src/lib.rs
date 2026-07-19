@@ -26,13 +26,15 @@ struct ProductInstallReceipt {
     etag: Option<String>,
     last_modified: Option<String>,
     content_length: Option<u64>,
+    local_modified_epoch_ms: Option<u128>,
 }
 
 #[derive(Clone)]
-struct RemoteArchiveSignature {
+struct ArchiveSignature {
     etag: Option<String>,
     last_modified: Option<String>,
     content_length: Option<u64>,
+    local_modified_epoch_ms: Option<u128>,
 }
 
 #[derive(Clone, Serialize)]
@@ -125,6 +127,38 @@ fn extract_mediafire_download_url(html: &str) -> Option<String> {
     Some(decode_html_entities(&html[href_start..href_end]))
 }
 
+fn is_local_archive_path(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let path = Path::new(trimmed);
+    path.is_absolute() || path.exists()
+}
+
+fn file_modified_epoch_ms(path: &Path) -> Result<u128, String> {
+    Ok(fs::metadata(path)
+        .map_err(|err| format!("Failed to read archive metadata for {}: {err}", path.display()))?
+        .modified()
+        .map_err(|err| format!("Failed to read archive modified time for {}: {err}", path.display()))?
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| format!("Archive modified time is invalid for {}: {err}", path.display()))?
+        .as_millis())
+}
+
+fn resolve_local_archive_signature(path: &Path) -> Result<ArchiveSignature, String> {
+    let metadata =
+        fs::metadata(path).map_err(|err| format!("Failed to inspect local archive {}: {err}", path.display()))?;
+
+    Ok(ArchiveSignature {
+        etag: None,
+        last_modified: None,
+        content_length: Some(metadata.len()),
+        local_modified_epoch_ms: Some(file_modified_epoch_ms(path)?),
+    })
+}
+
 fn resolve_download_response(client: &Client, url: &str) -> Result<Response, String> {
     if url.contains("mediafire.com/file/") {
         let html = client
@@ -147,6 +181,10 @@ fn resolve_download_response(client: &Client, url: &str) -> Result<Response, Str
             .map_err(|err| format!("Failed to download MediaFire file: {err}"));
     }
 
+    if is_local_archive_path(url) {
+        return Err("Local archives do not use HTTP download responses.".into());
+    }
+
     client
         .get(url)
         .send()
@@ -155,9 +193,9 @@ fn resolve_download_response(client: &Client, url: &str) -> Result<Response, Str
         .map_err(|err| format!("Failed to download product archive: {err}"))
 }
 
-fn response_signature(response: &Response) -> RemoteArchiveSignature {
+fn response_signature(response: &Response) -> ArchiveSignature {
     let headers = response.headers();
-    RemoteArchiveSignature {
+    ArchiveSignature {
         etag: headers
             .get(reqwest::header::ETAG)
             .and_then(|value| value.to_str().ok())
@@ -167,10 +205,15 @@ fn response_signature(response: &Response) -> RemoteArchiveSignature {
             .and_then(|value| value.to_str().ok())
             .map(|value| value.to_string()),
         content_length: response.content_length(),
+        local_modified_epoch_ms: None,
     }
 }
 
-fn resolve_remote_archive_signature(client: &Client, url: &str) -> Result<RemoteArchiveSignature, String> {
+fn resolve_archive_signature(client: &Client, url: &str) -> Result<ArchiveSignature, String> {
+    if is_local_archive_path(url) {
+        return resolve_local_archive_signature(Path::new(url));
+    }
+
     if url.contains("mediafire.com/file/") {
         let html = client
             .get(url)
@@ -204,7 +247,14 @@ fn resolve_remote_archive_signature(client: &Client, url: &str) -> Result<Remote
     Ok(response_signature(&response))
 }
 
-fn signatures_match(local: &ProductInstallReceipt, remote: &RemoteArchiveSignature) -> bool {
+fn signatures_match(local: &ProductInstallReceipt, remote: &ArchiveSignature) -> bool {
+    if let (Some(local_modified_epoch_ms), Some(remote_modified_epoch_ms)) =
+        (local.local_modified_epoch_ms, remote.local_modified_epoch_ms)
+    {
+        return local_modified_epoch_ms == remote_modified_epoch_ms
+            && local.content_length == remote.content_length;
+    }
+
     if let (Some(local_etag), Some(remote_etag)) = (&local.etag, &remote.etag) {
         return local_etag == remote_etag;
     }
@@ -271,6 +321,30 @@ fn create_launch_ticket(slug: &str) -> Result<String, String> {
     Ok(token)
 }
 
+fn stop_running_product_process(executable_path: &Path) -> Result<(), String> {
+    if !executable_path.exists() {
+        return Ok(());
+    }
+
+    let exe_name = executable_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("Unable to resolve executable name for {}", executable_path.display()))?;
+
+    let status = Command::new("taskkill")
+        .args(["/IM", exe_name, "/F", "/T"])
+        .status()
+        .map_err(|err| format!("Failed to stop running product process {exe_name}: {err}"))?;
+
+    if status.success() || matches!(status.code(), Some(128) | Some(255)) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Unable to stop running product process {exe_name} before replacing installed files."
+        ))
+    }
+}
+
 fn extract_product_archive_with_progress(
     bytes: Vec<u8>,
     install_dir: &Path,
@@ -294,11 +368,6 @@ fn extract_product_archive_with_progress(
     let mut archive =
         ZipArchive::new(Cursor::new(bytes)).map_err(|err| format!("Invalid zip archive: {err}"))?;
     let total_entries = archive.len().max(1);
-
-    if install_dir.exists() {
-        fs::remove_dir_all(install_dir)
-            .map_err(|err| format!("Failed to clear previous install directory: {err}"))?;
-    }
     fs::create_dir_all(install_dir).map_err(|err| format!("Failed to create install directory: {err}"))?;
 
     for index in 0..archive.len() {
@@ -370,7 +439,7 @@ fn get_product_status_sync(slug: String, url: String, exe_path: String) -> Resul
         if let Ok(contents) = fs::read_to_string(&receipt_path) {
             if let Ok(receipt) = serde_json::from_str::<ProductInstallReceipt>(&contents) {
                 if let Ok(client) = download_client() {
-                    if let Ok(remote) = resolve_remote_archive_signature(&client, &url) {
+                    if let Ok(remote) = resolve_archive_signature(&client, &url) {
                         update_available = !signatures_match(&receipt, &remote);
                     }
                 }
@@ -393,6 +462,7 @@ fn get_product_status_sync(slug: String, url: String, exe_path: String) -> Resul
 fn install_product_sync(app: AppHandle, slug: String, url: String, exe_path: String) -> Result<ProductStatus, String> {
     let install_dir = product_install_dir(&slug)?;
     let executable_path = product_executable_path(&slug, &exe_path)?;
+    let local_archive_path = is_local_archive_path(&url).then(|| PathBuf::from(&url));
 
     if let Some(parent) = install_dir.parent() {
         fs::create_dir_all(parent).map_err(|err| format!("Failed to prepare products directory: {err}"))?;
@@ -409,55 +479,92 @@ fn install_product_sync(app: AppHandle, slug: String, url: String, exe_path: Str
     );
 
     let client = download_client()?;
-    let mut response = resolve_download_response(&client, &url)?;
-    let archive_signature = response_signature(&response);
+    let archive_signature = if let Some(local_path) = &local_archive_path {
+        resolve_local_archive_signature(local_path)?
+    } else {
+        let response = resolve_download_response(&client, &url)?;
+        response_signature(&response)
+    };
 
-    let total_size = response.content_length();
-    let mut bytes = Vec::new();
-    let mut downloaded = 0_u64;
-    let mut buffer = [0_u8; 512 * 1024];
-    let mut last_progress = 0_u8;
-    let mut last_emit_at = Instant::now();
+    let bytes = if let Some(local_path) = &local_archive_path {
+        emit_progress(
+            &app,
+            ProductProgress {
+                slug: slug.clone(),
+                phase: "downloading".into(),
+                progress: 70,
+                message: format!("Reading local archive {}...", local_path.display()),
+            },
+        );
 
-    loop {
-        let read = response
-            .read(&mut buffer)
-            .map_err(|err| format!("Failed to read product archive: {err}"))?;
-        if read == 0 {
-            break;
-        }
+        fs::read(local_path).map_err(|err| format!("Failed to read local archive {}: {err}", local_path.display()))?
+    } else {
+        let mut response = resolve_download_response(&client, &url)?;
+        let total_size = response.content_length();
+        let mut bytes = Vec::new();
+        let mut downloaded = 0_u64;
+        let mut buffer = [0_u8; 512 * 1024];
+        let mut last_progress = 0_u8;
+        let mut last_emit_at = Instant::now();
 
-        bytes.extend_from_slice(&buffer[..read]);
-        downloaded += read as u64;
+        loop {
+            let read = response
+                .read(&mut buffer)
+                .map_err(|err| format!("Failed to read product archive: {err}"))?;
+            if read == 0 {
+                break;
+            }
 
-        let progress = if let Some(total) = total_size {
-            ((downloaded.saturating_mul(70)) / total.max(1)) as u8
-        } else {
-            0
-        };
+            bytes.extend_from_slice(&buffer[..read]);
+            downloaded += read as u64;
 
-        let bounded_progress = progress.min(70);
-        let should_emit = bounded_progress > last_progress
-            || last_emit_at.elapsed() >= Duration::from_millis(250);
+            let progress = if let Some(total) = total_size {
+                ((downloaded.saturating_mul(70)) / total.max(1)) as u8
+            } else {
+                0
+            };
 
-        if should_emit {
-            last_progress = bounded_progress;
-            last_emit_at = Instant::now();
+            let bounded_progress = progress.min(70);
+            let should_emit = bounded_progress > last_progress
+                || last_emit_at.elapsed() >= Duration::from_millis(250);
 
-            emit_progress(
-                &app,
-                ProductProgress {
-                    slug: slug.clone(),
-                    phase: "downloading".into(),
-                    progress: bounded_progress,
-                    message: if let Some(total) = total_size {
-                        format!("Downloading archive... {}%", ((downloaded.saturating_mul(100)) / total.max(1)).min(100))
-                    } else {
-                        "Downloading archive...".into()
+            if should_emit {
+                last_progress = bounded_progress;
+                last_emit_at = Instant::now();
+
+                emit_progress(
+                    &app,
+                    ProductProgress {
+                        slug: slug.clone(),
+                        phase: "downloading".into(),
+                        progress: bounded_progress,
+                        message: if let Some(total) = total_size {
+                            format!("Downloading archive... {}%", ((downloaded.saturating_mul(100)) / total.max(1)).min(100))
+                        } else {
+                            "Downloading archive...".into()
+                        },
                     },
-                },
-            );
+                );
+            }
         }
+
+        bytes
+    };
+
+    emit_progress(
+        &app,
+        ProductProgress {
+            slug: slug.clone(),
+            phase: "installing".into(),
+            progress: 72,
+            message: "Stopping running product before install...".into(),
+        },
+    );
+    let _ = stop_running_product_process(&executable_path);
+
+    if install_dir.exists() {
+        fs::remove_dir_all(&install_dir)
+            .map_err(|err| format!("Failed to clear previous install directory: {err}"))?;
     }
 
     emit_progress(
@@ -465,8 +572,8 @@ fn install_product_sync(app: AppHandle, slug: String, url: String, exe_path: Str
         ProductProgress {
             slug: slug.clone(),
             phase: "installing".into(),
-            progress: 70,
-            message: "Extracting downloaded archive...".into(),
+            progress: 74,
+            message: "Extracting archive...".into(),
         },
     );
 
@@ -484,6 +591,7 @@ fn install_product_sync(app: AppHandle, slug: String, url: String, exe_path: Str
         etag: archive_signature.etag,
         last_modified: archive_signature.last_modified,
         content_length: archive_signature.content_length,
+        local_modified_epoch_ms: archive_signature.local_modified_epoch_ms,
     };
     let receipt_path = product_receipt_path(&slug)?;
     let receipt_contents =
@@ -510,17 +618,20 @@ fn install_product_sync(app: AppHandle, slug: String, url: String, exe_path: Str
 }
 
 fn launch_product_sync(slug: String, exe_path: String) -> Result<(), String> {
-    let install_dir = product_install_dir(&slug)?;
     let executable_path = product_executable_path(&slug, &exe_path)?;
 
     if !executable_path.exists() {
         return Err(format!("Executable not found at {}", executable_path.display()));
     }
 
+    let launch_dir = executable_path
+        .parent()
+        .ok_or_else(|| format!("Unable to resolve launch directory for {}", executable_path.display()))?;
+
     let launch_token = create_launch_ticket(&slug)?;
 
     Command::new(&executable_path)
-        .current_dir(&install_dir)
+        .current_dir(launch_dir)
         .arg("--apro-product-slug")
         .arg(&slug)
         .arg("--apro-launch-token")
@@ -541,6 +652,17 @@ fn uninstall_product_sync(app: AppHandle, slug: String, exe_path: String) -> Res
             slug: slug.clone(),
             phase: "uninstalling".into(),
             progress: 10,
+            message: "Stopping running product before uninstall...".into(),
+        },
+    );
+    let _ = stop_running_product_process(&executable_path);
+
+    emit_progress(
+        &app,
+        ProductProgress {
+            slug: slug.clone(),
+            phase: "uninstalling".into(),
+            progress: 45,
             message: "Removing installed files...".into(),
         },
     );
