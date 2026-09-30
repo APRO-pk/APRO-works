@@ -1,8 +1,10 @@
-//! End-to-end verification: real aproCAD mass properties, through the real orchestration
-//! store and HTTP API, into a real HexaDOF model import.
+//! End-to-end verification: real aproCAD mass properties, published by the **real
+//! producer bridge**, through the real orchestration store and HTTP API, imported by the
+//! **real consumer bridge** into a real HexaDOF model.
 //!
-//! Everything numeric here is checked against closed-form physics for a rectangular
-//! body, not against itself. That is deliberate: a unit error of 1e6 in the inertia
+//! Nothing here is a stub and nothing is reimplemented: if either bridge regresses, this
+//! fails. Everything numeric is checked against closed-form physics for a rectangular
+//! body, not against itself. That is deliberate — a unit error of 1e6 in the inertia
 //! tensor is self-consistent and would pass a round-trip test that only compared the
 //! payload to itself.
 //!
@@ -13,14 +15,14 @@
 use std::net::{IpAddr, Ipv4Addr};
 
 use apro_api::{AuthRegistry, ServerConfig};
-use apro_client::{AproStoreClient, ClientConfig, HttpStoreClient};
-use apro_store::{
-    AppInterface, EdgeFilter, EdgeRequest, Encoding, Mode, Selector, Store, StoreConfig, TypeId,
-};
+use apro_store::{EdgeFilter, EdgeRequest, Mode, Selector, Store, StoreConfig, TypeId};
 
-use apro_harness::{
-    to_model_document, MassPropertiesV1, ReferenceGeometrySi, SourceUnits, MASS_PROPERTIES_TYPE,
+use apro_cad_bridge::apro_client::{AproStoreClient, ClientConfig, HttpStoreClient};
+use apro_cad_bridge::apro_contracts::{
+    DocumentMassProperties, MassPropertiesV1, ReferenceGeometrySi, SourceUnits,
+    MASS_PROPERTIES_TYPE,
 };
+use apro_cad_bridge::{DatumOffset, PublishRequest};
 
 // ---------------------------------------------------------------------------
 // Geometry fixtures
@@ -28,8 +30,10 @@ use apro_harness::{
 
 const EDGE_MM: f64 = 100.0;
 const DENSITY_KG_PER_MM3: f64 = 2700.0 / 1.0e9; // Al-6061-T6
+const MATERIAL: &str = "Al-6061-T6";
 
-/// A `EDGE_MM x EDGE_MM x length_mm` rectangular body, **outward wound**.
+/// A `EDGE_MM x EDGE_MM x length_mm` rectangular body, **outward wound**, lying along +Z
+/// from the CAD origin — the axis aproCAD models along.
 ///
 /// Winding matters. `compute_mass_properties` takes `.abs()` of the total volume and
 /// divides the first moment by the *signed* volume, so an inverted mesh still yields the
@@ -61,6 +65,7 @@ fn body_mesh_mm(length_mm: f32) -> apro_kernel::MeshData {
 /// because the source units drive every conversion factor.
 const ROCKET_RON: &str = r#"
 Vehicle(
+    uid: "veh-test-0001",
     name: "Sounding Rocket",
     units: Millimeters,
     components: [
@@ -93,12 +98,22 @@ fn expected_native(length_mm: f64) -> (f64, f64, f64, f64) {
     (mass_kg, volume_mm3, ixx_mm, izz_mm)
 }
 
-/// Run the real CAD pipeline for a body of the given length, returning its native
-/// (document-unit) mass properties.
+/// Run the real CAD pipeline for a body of the given length.
 fn native_mass_properties(length_mm: f32) -> apro_massprops::MassProperties {
     let mesh = body_mesh_mm(length_mm);
-    let density = apro_document::density_kg_per_mm3("Al-6061-T6");
+    let density = apro_document::density_kg_per_mm3(MATERIAL);
     apro_massprops::compute_mass_properties(&mesh, density)
+}
+
+/// The same numbers, in the app-agnostic form the contract's conversion takes.
+fn document_mass_properties(length_mm: f32) -> DocumentMassProperties {
+    let native = native_mass_properties(length_mm);
+    DocumentMassProperties {
+        volume: native.volume,
+        mass_kg: native.mass,
+        center_of_mass: native.center_of_mass,
+        inertia: native.inertia_tensor,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -155,14 +170,6 @@ impl Harness {
     }
 }
 
-fn reference_geometry(length_m: f64) -> ReferenceGeometrySi {
-    ReferenceGeometrySi {
-        reference_area_m2: 0.01, // 100 mm x 100 mm body
-        reference_length_m: length_m,
-        body_diameter_m: 0.1,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // The end-to-end test
 // ---------------------------------------------------------------------------
@@ -198,16 +205,29 @@ fn cad_mass_properties_reach_hexadof_as_si() {
         native.inertia_tensor[2][2]
     );
 
-    // The document's own unit system drives the conversion.
+    // The document's own unit system drives the conversion. The uid the document now
+    // carries is what the design publishes under.
     let vehicle: apro_document::Vehicle = ron::from_str(ROCKET_RON).expect("RON must parse");
     assert_eq!(vehicle.name, "Sounding Rocket");
-    let source = SourceUnits::from_aprocad(&vehicle.units);
+    assert_eq!(vehicle.uid.as_deref(), Some("veh-test-0001"));
+    assert_eq!(apro_cad_bridge::instance_name(&vehicle).unwrap(), "veh-test-0001");
+
+    let source = apro_cad_bridge::source_units(&vehicle.units);
     assert_eq!(source, SourceUnits::Millimeters);
     assert_eq!(source.metres_per_unit(), 0.001);
     assert_eq!(source.inertia_scale(), 1.0e-6);
 
-    // ---------------------------------------------------------------- 2. bridge
-    let payload = MassPropertiesV1::from_aprocad(&native, source);
+    // ---------------------------------------------------------------- 2. conversion
+    // Exercised through the real bridge, not a local copy of the maths.
+    let payload = apro_cad_bridge::to_payload(
+        &vehicle,
+        &native,
+        DatumOffset::coincident(),
+        Some(ReferenceGeometrySi::from_bounding_box(
+            [0.1, 0.1, LENGTH_MM / 1000.0],
+            2,
+        )),
+    );
     assert_eq!(payload.units, "SI");
     assert!((payload.mass_kg - mass_kg).abs() / mass_kg < 1e-9);
     assert!(
@@ -237,54 +257,60 @@ fn cad_mass_properties_reach_hexadof_as_si() {
         payload.inertia_asymmetry() < 1e-12,
         "inertia must be symmetric"
     );
+    assert!(payload.reference_geometry.is_some(), "geometry must travel");
 
     // ---------------------------------------------------------------- 3. platform
     let harness = Harness::start();
-    let cad = harness.client("burn-geometry-modeler");
-    let consumer = harness.client("hexadof");
+    let cad = harness.client(apro_cad_bridge::APP_SLUG);
 
-    let type_id = TypeId::parse(MASS_PROPERTIES_TYPE).expect("type id must be valid");
-    cad.declare_interface(&AppInterface {
-        app: "burn-geometry-modeler".into(),
-        publishes: vec![type_id.clone()],
-        consumes: vec![],
-    })
-    .unwrap();
-
-    let revision_one_bytes = payload.to_json().unwrap().into_bytes();
-    let published = cad
-        .push_labeled(
-            &type_id,
-            "sounding-rocket-a",
-            Encoding::Json,
-            Some("Mass properties - sounding rocket A"),
-            &revision_one_bytes,
-        )
-        .unwrap();
+    // Publish through the real bridge: it declares the interface, converts, validates,
+    // and pushes.
+    let published = apro_cad_bridge::publish(
+        &cad,
+        PublishRequest {
+            vehicle: &vehicle,
+            mass: &native,
+            datum: DatumOffset::coincident(),
+            reference: Some(ReferenceGeometrySi::from_bounding_box(
+                [0.1, 0.1, LENGTH_MM / 1000.0],
+                2,
+            )),
+            label: Some("Mass properties - sounding rocket A"),
+        },
+    )
+    .expect("the bridge must publish");
+    assert_eq!(published.instance, "veh-test-0001");
     assert_eq!(published.revision_number, 1);
-    assert_eq!(published.byte_size, revision_one_bytes.len() as u64);
+    assert!(!published.unchanged);
 
     // Identical re-publish must not spam revisions.
-    let again = cad
-        .push(
-            &type_id,
-            "sounding-rocket-a",
-            Encoding::Json,
-            &revision_one_bytes,
-        )
-        .unwrap();
-    assert!(
-        again.unchanged,
-        "an unchanged save must not create a revision"
-    );
+    let again = apro_cad_bridge::publish(
+        &cad,
+        PublishRequest {
+            vehicle: &vehicle,
+            mass: &native,
+            datum: DatumOffset::coincident(),
+            reference: Some(ReferenceGeometrySi::from_bounding_box(
+                [0.1, 0.1, LENGTH_MM / 1000.0],
+                2,
+            )),
+            label: None,
+        },
+    )
+    .unwrap();
+    assert!(again.unchanged, "an unchanged publish must not create a revision");
+    assert_eq!(again.revision_number, 1);
 
     // ---------------------------------------------------------------- 4. consumer
+    let consumer = harness.client("hexadof");
+    let type_id = TypeId::parse(MASS_PROPERTIES_TYPE).expect("type id must be valid");
+
     let edge = consumer
         .register_edge(&EdgeRequest {
             consumer_app: "hexadof".into(),
             consumer_ref: Some("run-001".into()),
             type_id: type_id.clone(),
-            instance: "sounding-rocket-a".into(),
+            instance: "veh-test-0001".into(),
             mode: Mode::Tracking,
             pinned_revision_number: None,
             min_revision_number: None,
@@ -292,85 +318,109 @@ fn cad_mass_properties_reach_hexadof_as_si() {
         .unwrap();
     assert!(!edge.stale, "a fresh edge starts satisfied");
 
-    let pulled = consumer
-        .pull(&type_id, "sounding-rocket-a", Selector::Latest)
+    let revision_one_bytes = cad
+        .pull(&type_id, "veh-test-0001", Selector::Number(1))
         .unwrap()
-        .expect("consumer must be able to fetch the published payload");
+        .expect("revision 1 must exist")
+        .bytes;
+
+    // ------------------------------- 5. real bridge import into real HexaDOF
+    let (pulled, imported) =
+        hex_bridge::import_from_platform(&consumer, "veh-test-0001", "Sounding Rocket A", None)
+            .expect("the consumer bridge must import");
+
     assert_eq!(pulled.revision_number, 1);
-    assert_eq!(
-        pulled.content_hash,
-        apro_store::content_hash(&revision_one_bytes),
-        "the store must return the producer's bytes verbatim"
-    );
-
-    let received = MassPropertiesV1::from_json(pulled.as_str().unwrap()).unwrap();
-    assert_eq!(received, payload, "payload must survive the round trip exactly");
-
-    // ------------------------------------------------- 5. real HexaDOF import
-    let document = to_model_document(
-        &received,
-        "sounding-rocket-a",
-        "Sounding Rocket A",
-        reference_geometry(0.6),
-    )
-    .expect("an SI payload must map onto the model document");
-
-    let text = document.to_json_pretty().unwrap();
-    let imported = hex_model::import_json(&text, &hex_model::ImportOptions::si())
-        .expect("HexaDOF must import");
+    assert_eq!(pulled.content_hash, apro_store::content_hash(&revision_one_bytes));
+    assert_eq!(pulled.payload, payload, "payload must survive the round trip exactly");
 
     assert!(
         !imported.validation.has_errors(),
         "HexaDOF reported blocking findings: {:?}",
         imported.validation
     );
+    assert_eq!(imported.model_id, "veh-test-0001");
     assert!(
         (imported.mass() - mass_kg).abs() / mass_kg < 1e-9,
         "mass drifted"
     );
+
+    // The axis mapping is the second half of the boundary: CAD +Z (the long axis) becomes
+    // the body's forward axis, so the CG offset lands on body x, not body z.
     let cg = imported.center_of_gravity();
     assert!(
-        (cg[2] - 0.3).abs() < 1e-12,
-        "HexaDOF read CG {} m, expected 0.3 m",
-        cg[2]
+        (cg[0] - 0.3).abs() < 1e-12,
+        "HexaDOF read forward CG {} m, expected 0.3 m on the forward axis",
+        cg[0]
     );
+
     let inertia = imported.inertia();
+    // The block is long along CAD Z, so after the rotation the LARGEST inertia is about
+    // the forward axis's perpendicular pair, and the smallest is about forward itself.
     assert!(
-        (inertia.ixx - ixx_mm / 1.0e6).abs() < 1e-9,
-        "HexaDOF read Ixx {} kg.m^2, expected {}",
+        (inertia.ixx - izz_mm / 1.0e6).abs() < 1e-9,
+        "body Ixx {} should be the CAD transverse inertia {}",
         inertia.ixx,
+        izz_mm / 1.0e6
+    );
+    assert!(
+        (inertia.iyy - ixx_mm / 1.0e6).abs() < 1e-9,
+        "body Iyy {} should be the CAD long-axis inertia {}",
+        inertia.iyy,
         ixx_mm / 1.0e6
     );
-    assert!((inertia.izz - izz_mm / 1.0e6).abs() < 1e-9);
+    // cad_y -> body z. The cross-section is square, so this equals the CAD x inertia;
+    // it is the small one, which is what makes a transposed tensor so easy to miss.
+    assert!(
+        (inertia.izz - ixx_mm / 1.0e6).abs() < 1e-9,
+        "body Izz {} should be the CAD y inertia {}",
+        inertia.izz,
+        ixx_mm / 1.0e6
+    );
+    assert_eq!(
+        imported.frame.body,
+        hex_core::BodyFrame::ForwardLeftUp,
+        "the declared body frame must be the one the mapping assumed"
+    );
     // Off-diagonal terms of a box about its own CG are zero.
     assert!(inertia.ixy.abs() < 1e-12);
 
     // ---------------------------------------------------------------- 6. the graph
     // The model genuinely changes: the body is extended from 600 mm to 800 mm.
     const REVISED_MM: f64 = 800.0;
-    let (mass2, _vol2, ixx2_mm, izz2_mm) = expected_native(REVISED_MM);
-    let revised = MassPropertiesV1::from_aprocad(
-        &native_mass_properties(REVISED_MM as f32),
-        source,
+    let (mass2, _vol2, ixx2_mm, _izz2_mm) = expected_native(REVISED_MM);
+    let revised_native = native_mass_properties(REVISED_MM as f32);
+    let revised_reference = ReferenceGeometrySi::from_bounding_box(
+        [0.1, 0.1, REVISED_MM / 1000.0],
+        2,
     );
-    assert!((revised.mass_kg - mass2).abs() / mass2 < 1e-6);
+    let revised_payload = apro_cad_bridge::to_payload(
+        &vehicle,
+        &revised_native,
+        DatumOffset::coincident(),
+        Some(revised_reference.clone()),
+    );
+    assert!((revised_payload.mass_kg - mass2).abs() / mass2 < 1e-6);
     assert!(
-        (revised.inertia_kg_m2[0][0] - ixx2_mm / 1.0e6).abs() < 1e-6,
+        (revised_payload.inertia_kg_m2[0][0] - ixx2_mm / 1.0e6).abs() < 1e-6,
         "revision 2 Ixx should reflect the longer body"
     );
-    assert!(revised.inertia_kg_m2[0][0] > payload.inertia_kg_m2[0][0]);
+    assert!(revised_payload.inertia_kg_m2[0][0] > payload.inertia_kg_m2[0][0]);
+    // The body got longer, so the reference length the producer declares must follow it.
+    assert!(
+        (revised_reference.reference_length_m - REVISED_MM / 1000.0).abs() < 1e-12
+    );
 
-    let revision_two_bytes = revised.to_json().unwrap().into_bytes();
-    assert_ne!(revision_one_bytes, revision_two_bytes);
-
-    let second = cad
-        .push(
-            &type_id,
-            "sounding-rocket-a",
-            Encoding::Json,
-            &revision_two_bytes,
-        )
-        .unwrap();
+    let second = apro_cad_bridge::publish(
+        &cad,
+        PublishRequest {
+            vehicle: &vehicle,
+            mass: &revised_native,
+            datum: DatumOffset::coincident(),
+            reference: Some(revised_reference),
+            label: None,
+        },
+    )
+    .unwrap();
     assert_eq!(second.revision_number, 2);
 
     let stale = consumer
@@ -390,7 +440,7 @@ fn cad_mass_properties_reach_hexadof_as_si() {
 
     // Reproducibility: revision 1 is still readable byte-for-byte after revision 2.
     let historical = consumer
-        .pull(&type_id, "sounding-rocket-a", Selector::Number(1))
+        .pull(&type_id, "veh-test-0001", Selector::Number(1))
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -400,31 +450,14 @@ fn cad_mass_properties_reach_hexadof_as_si() {
 
     // The stale notification is actionable: the consumer re-imports at revision 2 and
     // gets the new physics, then the edge is satisfied again.
-    let refreshed =
-        MassPropertiesV1::from_json(historical.as_str().unwrap()).unwrap();
-    assert_eq!(refreshed, payload);
-    let latest = consumer
-        .pull(&type_id, "sounding-rocket-a", Selector::Latest)
-        .unwrap()
-        .unwrap();
-    let latest_payload = MassPropertiesV1::from_json(latest.as_str().unwrap()).unwrap();
-    let updated_doc = to_model_document(
-        &latest_payload,
-        "sounding-rocket-a",
-        "Sounding Rocket A",
-        reference_geometry(0.8),
-    )
-    .unwrap();
-    let updated = hex_model::import_json(
-        &updated_doc.to_json_pretty().unwrap(),
-        &hex_model::ImportOptions::si(),
-    )
-    .unwrap();
+    let (_, updated) =
+        hex_bridge::import_from_platform(&consumer, "veh-test-0001", "Sounding Rocket A", None)
+            .unwrap();
     assert!(
         (updated.mass() - mass2).abs() / mass2 < 1e-9,
         "the updated model must carry the new mass"
     );
-    assert!((updated.inertia().izz - izz2_mm / 1.0e6).abs() < 1e-9);
+    assert!((updated.inertia().iyy - ixx2_mm / 1.0e6).abs() < 1e-9);
 
     let satisfied = consumer.satisfy_edge(&edge.edge_id, Some(2)).unwrap();
     assert!(!satisfied.stale, "accepting the update clears staleness");
@@ -436,7 +469,7 @@ fn cad_mass_properties_reach_hexadof_as_si() {
             consumer_app: "hexadof".into(),
             consumer_ref: Some("run-001-report".into()),
             type_id: type_id.clone(),
-            instance: "sounding-rocket-a".into(),
+            instance: "veh-test-0001".into(),
             mode: Mode::Pinned,
             pinned_revision_number: Some(1),
             min_revision_number: None,
@@ -445,13 +478,8 @@ fn cad_mass_properties_reach_hexadof_as_si() {
     assert_eq!(pinned.pinned_revision_number, Some(1));
     assert!(!pinned.stale, "a pinned edge is satisfied by definition");
 
-    cad.push(
-        &type_id,
-        "sounding-rocket-a",
-        Encoding::Json,
-        b"{\"third\":true}",
-    )
-    .unwrap();
+    cad.push(&type_id, "veh-test-0001", apro_store::Encoding::Json, b"{\"third\":true}")
+        .unwrap();
     let still_pinned = consumer
         .list_edges(&EdgeFilter::default())
         .unwrap()
@@ -481,26 +509,72 @@ fn a_non_si_payload_is_refused_rather_than_guessed() {
         center_of_gravity_m: [0.05, 0.05, 300.0], // deliberately not converted
         inertia_kg_m2: [[ixx_mm, 0.0, 0.0], [0.0, ixx_mm, 0.0], [0.0, 0.0, izz_mm]],
         volume_m3: volume_mm3,
+        datum_offset_m: [0.0; 3],
         source_units: SourceUnits::Millimeters,
         source_note: "producer forgot to convert".into(),
+        reference_geometry: Some(ReferenceGeometrySi::from_body_diameter(0.1, 0.6)),
     };
 
-    let error = to_model_document(
-        &payload,
-        "unconverted",
-        "Unconverted",
-        reference_geometry(0.6),
-    )
-    .unwrap_err();
+    let error = hex_bridge::to_model_document(&payload, "unconverted", "Unconverted", None)
+        .unwrap_err();
     assert!(
-        matches!(error, apro_harness::BridgeError::NotSi { .. }),
+        matches!(
+            error,
+            hex_bridge::BridgeError::Contract(
+                apro_cad_bridge::apro_contracts::ContractError::NotSi { .. }
+            )
+        ),
         "expected a NotSi refusal, got {error}"
     );
 
     // The same payload declared as SI is accepted, proving the guard is about the
     // declared unit and not about the values.
     payload.units = "SI".into();
+    assert!(hex_bridge::to_model_document(&payload, "converted", "Converted", None).is_ok());
+}
+
+/// Reference area is a convention, not a derivation. A payload that does not carry one
+/// must be refused rather than flown against an invented number.
+#[test]
+fn a_payload_without_reference_geometry_is_refused() {
+    let native = document_mass_properties(600.0);
+    let payload = MassPropertiesV1::from_document(native, SourceUnits::Millimeters, [0.0; 3]);
+    assert!(payload.reference_geometry.is_none());
+
+    let error = hex_bridge::to_model_document(&payload, "veh-1", "No Geometry", None).unwrap_err();
+    assert!(matches!(
+        error,
+        hex_bridge::BridgeError::MissingReferenceGeometry
+    ));
+
+    // ...and the consumer can supply one, which is what the import dialog does.
+    let supplied = ReferenceGeometrySi::from_body_diameter(0.1, 0.6);
+    assert!(hex_bridge::to_model_document(&payload, "veh-1", "Supplied", Some(supplied)).is_ok());
+}
+
+/// The declared datum offset must move the centre of gravity and must not move the
+/// inertia, which is about the centre of gravity and so is invariant under translation.
+#[test]
+fn the_declared_datum_offset_shifts_the_centre_of_gravity_only() {
+    let native = document_mass_properties(600.0);
+    let reference = ReferenceGeometrySi::from_body_diameter(0.1, 0.6);
+
+    // The CAD origin sits 300 mm aft of the nose tip, so the nose is the body datum.
+    let payload = MassPropertiesV1::from_document(
+        native,
+        SourceUnits::Millimeters,
+        [0.0, 0.0, -0.3],
+    )
+    .with_reference_geometry(reference.clone());
+
+    let document =
+        hex_bridge::to_model_document(&payload, "veh-1", "Datumed", Some(reference)).unwrap();
+    let cg = document.mass_properties.center_of_gravity;
+
+    // CAD z 0.3 - 0.3 = 0, and CAD z maps onto the body forward axis.
+    assert!(cg.x.abs() < 1e-12, "forward CG was {} m, expected 0", cg.x);
+    // The inertia is unchanged by the shift.
     assert!(
-        to_model_document(&payload, "converted", "Converted", reference_geometry(0.6)).is_ok()
+        (document.mass_properties.inertia.iyy - payload.inertia_kg_m2[0][0]).abs() < 1e-18
     );
 }

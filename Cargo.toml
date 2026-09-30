@@ -12,8 +12,12 @@ edition = "2021"
 [workspace.dependencies]
 # The app-facing crates are published from their own repository so product apps can
 # depend on them without pulling in the platform. Pin the tag, not a branch.
-apro-client = { git = "https://github.com/APRO-pk/apro-client", tag = "v0.1.0" }
-apro-types = { git = "https://github.com/APRO-pk/apro-client", tag = "v0.1.0" }
+#
+# The tag must match the one the application bridges pin. Cargo treats two tags of the
+# same repository as different sources, so a mismatch silently links two copies of
+# `apro-types` and every type they share stops being interchangeable.
+apro-client = { git = "https://github.com/APRO-pk/apro-client", tag = "v0.3.0" }
+apro-types = { git = "https://github.com/APRO-pk/apro-client", tag = "v0.3.0" }
 
 apro-store = { path = "crates/apro-store" }
 apro-api = { path = "crates/apro-api" }

@@ -18,14 +18,15 @@
 use std::net::{IpAddr, Ipv4Addr};
 
 use apro_api::{AuthRegistry, ServerConfig};
-use apro_client::{AproStoreClient, ClientConfig, HttpStoreClient};
 use apro_store::{
     EdgeFilter, Encoding, Mode, Store, StoreConfig, SubscriptionRequest, TypeId,
 };
 
-use apro_harness::{
-    to_model_document, MassPropertiesV1, ReferenceGeometrySi, SourceUnits, MASS_PROPERTIES_TYPE,
+use apro_cad_bridge::apro_client::{AproStoreClient, ClientConfig, HttpStoreClient};
+use apro_cad_bridge::apro_contracts::{
+    MassPropertiesV1, ReferenceGeometrySi, MASS_PROPERTIES_TYPE,
 };
+use apro_cad_bridge::DatumOffset;
 
 /// Rocket body dimensions, in millimetres.
 const EDGE_MM: f64 = 100.0;
@@ -113,7 +114,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     rule("PRODUCER — the CAD application");
 
     let design: apro_document::Vehicle = ron::from_str(DESIGN_RON)?;
-    let units = SourceUnits::from_aprocad(&design.units);
+    let units = apro_cad_bridge::source_units(&design.units);
     println!("  design    : {}", design.name);
     println!("  components: {}", design.components.len());
     println!("  units     : {} (declared in the document)", units.as_str());
@@ -138,7 +139,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     step(2, "Converted at the publish boundary");
-    let payload = MassPropertiesV1::from_aprocad(&native, units);
+    // The conversion and the reference-geometry convention both live in the bridge, so the
+// demo prints exactly what a product app would publish.
+    let reference = ReferenceGeometrySi::from_body_diameter(0.1, length_mm / 1000.0);
+    let payload = apro_cad_bridge::to_payload(
+        &design,
+        &native,
+        DatumOffset::coincident(),
+        Some(reference.clone()),
+    );
     println!("  declared  : {}", payload.units);
     println!("  mass      : {:>14.4} kg          (unchanged — CAD density is kg/mm^3)", payload.mass_kg);
     println!(
@@ -220,16 +229,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  fetched   : revision {} ({} bytes)", pulled.revision_number, pulled.byte_size);
     println!("  hash match: {}", pulled.content_hash == apro_store::content_hash(&bytes));
 
-    let received = MassPropertiesV1::from_json(pulled.as_str()?)?;
-    let document = to_model_document(
+    let received = MassPropertiesV1::from_json_checked(pulled.as_str()?)?;
+    let document = hex_bridge::to_model_document(
         &received,
         "sounding-rocket-a",
         "Sounding Rocket A",
-        ReferenceGeometrySi {
-            reference_area_m2: 0.01,
-            reference_length_m: 0.6,
-            body_diameter_m: 0.1,
-        },
+        Some(reference.clone()),
     )?;
     let imported =
         hex_model::import_json(&document.to_json_pretty()?, &hex_model::ImportOptions::si())?;
@@ -244,20 +249,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    cg      : ({:.4}, {:.4}, {:.4}) m", cg[0], cg[1], cg[2]);
     let inertia = imported.inertia();
     println!("    Ixx     : {:>14.7} kg·m^2", inertia.ixx);
+    println!("    Iyy     : {:>14.7} kg·m^2", inertia.iyy);
     println!("    Izz     : {:>14.7} kg·m^2", inertia.izz);
 
     step(6, "Cross-checked against closed-form physics");
+    println!("  The body frame is Forward-Left-Up: CAD +Z (the long axis) becomes body");
+    println!("  forward, CAD +X becomes body left, CAD +Y becomes body up. So the CAD");
+    println!("  long-axis inertia lands on body Iyy, not on Ixx.");
+    // body_x = cad_z, body_y = cad_x, body_z = cad_y.
     let checks = [
         ("mass", imported.mass(), mass_kg, 1e-9),
-        ("cg z", cg[2], 0.3, 1e-12),
-        ("Ixx", inertia.ixx, ixx_mm / 1.0e6, 1e-9),
-        ("Izz", inertia.izz, izz_mm / 1.0e6, 1e-9),
+        ("cg fwd", cg[0], 0.3, 1e-12),
+        // cad_z -> body x, so body Ixx is the CAD transverse inertia.
+        ("Ixx", inertia.ixx, izz_mm / 1.0e6, 1e-9),
+        // cad_x -> body y, the CAD long-axis inertia.
+        ("Iyy", inertia.iyy, ixx_mm / 1.0e6, 1e-9),
+        // cad_y -> body z, which for this square body equals the CAD x inertia.
+        ("Izz", inertia.izz, ixx_mm / 1.0e6, 1e-9),
     ];
     for (label, actual, want, tolerance) in checks {
         let scale = want.abs().max(1e-12);
         let drift = (actual - want).abs() / scale;
         println!(
-            "  {label:<6} actual {actual:>14.9}  expected {want:>14.9}  rel.err {drift:.2e}  {}",
+            "  {label:<8} actual {actual:>14.9}  expected {want:>14.9}  rel.err {drift:.2e}  {}",
             if drift <= tolerance { "ok" } else { "FAILED" }
         );
     }
@@ -268,12 +282,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     step(7, "The CAD application republishes");
     let revised_length = 800.0;
     let (mass2, _, ixx2_mm, _) = expected(revised_length);
-    let revised = MassPropertiesV1::from_aprocad(
+    let revised = apro_cad_bridge::to_payload(
+        &design,
         &apro_massprops::compute_mass_properties(
             &body_mesh_mm(revised_length as f32),
             density,
         ),
-        units,
+        DatumOffset::coincident(),
+        Some(reference.clone()),
     );
     let second = cad.push(
         &type_id,

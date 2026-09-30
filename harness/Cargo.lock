@@ -55,9 +55,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "apro-client"
+name = "apro-cad-bridge"
 version = "0.1.0"
-source = "git+https://github.com/APRO-pk/apro-client?tag=v0.1.0#9f1659142555777c9a29fe949a5d76dd3b081f90"
+dependencies = [
+ "apro-client",
+ "apro-contracts",
+ "apro-document",
+ "apro-massprops",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "apro-client"
+version = "0.3.0"
+source = "git+https://github.com/APRO-pk/apro-client?tag=v0.3.0#270f6ef456e50dcc4a2d4ef9f4862872948893ea"
 dependencies = [
  "apro-types",
  "dirs",
@@ -65,6 +78,15 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "apro-contracts"
+version = "0.3.0"
+source = "git+https://github.com/APRO-pk/apro-client?tag=v0.3.0#270f6ef456e50dcc4a2d4ef9f4862872948893ea"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -81,11 +103,12 @@ name = "apro-harness"
 version = "0.0.0"
 dependencies = [
  "apro-api",
- "apro-client",
+ "apro-cad-bridge",
  "apro-document",
  "apro-kernel",
  "apro-massprops",
  "apro-store",
+ "hex-bridge",
  "hex-core",
  "hex-model",
  "ron",
@@ -133,8 +156,8 @@ dependencies = [
 
 [[package]]
 name = "apro-types"
-version = "0.1.0"
-source = "git+https://github.com/APRO-pk/apro-client?tag=v0.1.0#9f1659142555777c9a29fe949a5d76dd3b081f90"
+version = "0.3.0"
+source = "git+https://github.com/APRO-pk/apro-client?tag=v0.3.0#270f6ef456e50dcc4a2d4ef9f4862872948893ea"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -696,6 +719,19 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "hex-bridge"
+version = "0.1.0"
+dependencies = [
+ "apro-client",
+ "apro-contracts",
+ "hex-core",
+ "hex-model",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "hex-core"
