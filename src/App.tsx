@@ -1,12 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
-import type { MouseEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
 import {
   PhysicalPosition,
   PhysicalSize,
   currentMonitor,
-  cursorPosition,
   getCurrentWindow,
 } from "@tauri-apps/api/window";
 import { supabase } from "./lib/supabase";
@@ -276,7 +275,12 @@ function LoginScreen({
   const [showPassword, setShowPassword] = useState(false);
 
   return (
-    <div className="app-canvas relative flex h-screen items-center justify-center overflow-hidden px-6 text-ink">
+    /* The window has no decorations, so the sign-in screen needs its own drag region
+       or the window cannot be moved at all before signing in. */
+    <div
+      data-tauri-drag-region="deep"
+      className="app-canvas relative flex h-screen items-center justify-center overflow-hidden px-6 text-ink"
+    >
       <div className="ambient-bloom" aria-hidden="true" />
       <AmbientDefence className="absolute inset-0 h-full w-full" />
 
@@ -1068,7 +1072,6 @@ function SettingsPanel({
 }
 
 function App() {
-  const appWindow = useMemo(() => getCurrentWindow(), []);
   const [authReady, setAuthReady] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState("");
@@ -1356,45 +1359,6 @@ function App() {
     }
   }
 
-  async function handleTitlebarMouseDown(event: MouseEvent<HTMLElement>) {
-    const target = event.target as HTMLElement;
-    if (target.closest("button, input, a")) {
-      return;
-    }
-
-    try {
-      const isMaximized = await appWindow.isMaximized();
-      if (isMaximized) {
-        const mousePosition = await cursorPosition();
-        const monitor = await currentMonitor();
-        const workArea = monitor?.workArea;
-        const restoredWidth = Math.min(RESTORED_WINDOW_WIDTH, workArea?.size.width ?? RESTORED_WINDOW_WIDTH);
-        const restoredHeight = Math.min(RESTORED_WINDOW_HEIGHT, workArea?.size.height ?? RESTORED_WINDOW_HEIGHT);
-        const relativeX = workArea ? (mousePosition.x - workArea.position.x) / workArea.size.width : 0.5;
-        const unclampedX = Math.round(mousePosition.x - restoredWidth * relativeX);
-        const unclampedY = Math.round(mousePosition.y - 18);
-        const minX = workArea?.position.x ?? unclampedX;
-        const minY = workArea?.position.y ?? unclampedY;
-        const maxX = workArea ? workArea.position.x + workArea.size.width - restoredWidth : unclampedX;
-        const maxY = workArea ? workArea.position.y + workArea.size.height - restoredHeight : unclampedY;
-        const nextX = Math.min(Math.max(unclampedX, minX), maxX);
-        const nextY = Math.min(Math.max(unclampedY, minY), maxY);
-
-        await appWindow.unmaximize();
-        await appWindow.setResizable(true);
-        await appWindow.setMinSize(null);
-        await appWindow.setMaxSize(null);
-        await appWindow.setSize(new PhysicalSize(restoredWidth, restoredHeight));
-        await appWindow.setPosition(new PhysicalPosition(nextX, nextY));
-        await appWindow.setResizable(false);
-      }
-
-      await appWindow.startDragging();
-    } catch {
-      // Browser preview.
-    }
-  }
-
   async function handleProductAction(product: ProductDefinition) {
     const currentStatus = productStatuses[product.slug];
     setBusy(true);
@@ -1635,7 +1599,22 @@ function App() {
       {/* ---- content column ------------------------------------------------ */}
       <div className="relative z-10 flex min-w-0 flex-1 flex-col">
         <header
-          onMouseDown={handleTitlebarMouseDown}
+          /*
+           * Dragging and double-click-to-maximize are handled by Tauri itself. It
+           * injects a listener that starts a caption drag on mousedown and calls
+           * `internal_toggle_maximize` when the click count reaches two, and it
+           * ignores clicks that land on buttons, inputs and labels — so the search
+           * field and the window controls keep working.
+           *
+           * `deep` rather than a bare attribute: without it only direct hits on this
+           * element drag, and the breadcrumb text inside would not.
+           *
+           * This replaced a hand-written mousedown handler. That handler awaited
+           * `isMaximized()` before calling `startDragging()`, which broke the
+           * synchronous caption handoff Windows needs — the drag started late, and the
+           * double-click could never be recognised as a caption double-click.
+           */
+          data-tauri-drag-region="deep"
           className="glass flex h-12 shrink-0 items-center gap-3 border-x-0 border-t-0 px-4"
         >
           <p className="shrink-0 text-[12px] text-ink-faint">
