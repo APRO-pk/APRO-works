@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityConsole } from "../components/ActivityConsole";
 import { WorkflowCanvas } from "../components/workflow/WorkflowCanvas";
 import {
+  addAppNode,
   clearWorkflow,
   defaultWorkflow,
   describeType,
@@ -27,6 +28,7 @@ import {
   setWireMode,
   type AppDescriptor,
   type WorkflowGraph,
+  type WorkflowNode,
   type WorkflowWire,
   type WireMode,
 } from "../lib/workflow";
@@ -60,6 +62,31 @@ type Props = {
   onConsoleClose: () => void;
   className?: string;
 };
+
+/**
+ * The first grid position that is not already occupied.
+ *
+ * Placing a new block at a running count would land it on top of anything the user has
+ * already dragged somewhere, so each candidate slot is tested against the blocks that
+ * are actually there.
+ */
+function freeSlot(nodes: WorkflowNode[]): { x: number; y: number } {
+  const COLS = 3;
+  const X0 = 60;
+  const Y0 = 40;
+  const DX = 320;
+  const DY = 250;
+
+  for (let slot = 0; slot < 60; slot += 1) {
+    const x = X0 + (slot % COLS) * DX;
+    const y = Y0 + Math.floor(slot / COLS) * DY;
+    const taken = nodes.some(
+      (node) => Math.abs(node.position.x - x) < 150 && Math.abs(node.position.y - y) < 100,
+    );
+    if (!taken) return { x, y };
+  }
+  return { x: X0, y: Y0 };
+}
 
 function AppIcon({ app, size = 26 }: { app: AppDescriptor; size?: number }) {
   if (app.icon) {
@@ -171,6 +198,13 @@ export function WorkflowsPanel({
 
   const handleReject = useCallback((reason: string) => setToast(reason), []);
 
+  /** Drop a block onto the canvas without dragging one there. */
+  const handleAddBlock = useCallback((app: AppDescriptor) => {
+    setGraph((current) =>
+      current ? addAppNode(current, app, freeSlot(current.nodes)) : current,
+    );
+  }, []);
+
   const drafts = useMemo(
     () => (graph ? graph.wires.filter((wire) => !wire.applied) : []),
     [graph],
@@ -263,7 +297,23 @@ export function WorkflowsPanel({
         </div>
       ) : null}
 
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="flex shrink-0 items-center justify-end gap-2">
+        {/* A draft is un-applied work. Surfacing it here means collapsing the panel
+            cannot hide something the user still has to act on. */}
+        {drafts.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => setConnectionsOpen(true)}
+            className="pill pill-accent cursor-pointer"
+            title="There are wires drawn locally but not yet written to the store"
+          >
+            {drafts.length} draft — apply to save
+          </button>
+        ) : null}
+
+        <span className="pill">{graph.wires.length} total</span>
+
+        {/* On the right, because the panel it opens is on the right. */}
         <button
           type="button"
           onClick={() => setConnectionsOpen((open) => !open)}
@@ -282,23 +332,6 @@ export function WorkflowsPanel({
           </svg>
           Connections
         </button>
-
-        <span className="pill">
-          {graph.wires.length} total
-        </span>
-
-        {/* A draft is un-applied work. Surfacing it here means collapsing the panel
-            cannot hide something the user still has to act on. */}
-        {drafts.length > 0 ? (
-          <button
-            type="button"
-            onClick={() => setConnectionsOpen(true)}
-            className="pill pill-accent cursor-pointer"
-            title="There are wires drawn locally but not yet written to the store"
-          >
-            {drafts.length} draft — apply to save
-          </button>
-        ) : null}
       </div>
 
       <div className="flex min-h-0 flex-1 gap-3">
@@ -312,20 +345,54 @@ export function WorkflowsPanel({
                 <button
                   key={app.slug}
                   type="button"
-                  draggable
+                  draggable={!onCanvas}
+                  disabled={onCanvas}
                   onDragStart={(event) => {
                     event.dataTransfer.setData("application/apro-app", app.slug);
                     event.dataTransfer.effectAllowed = "move";
                   }}
-                  title={app.name}
-                  className={`flex cursor-grab items-center gap-2.5 rounded-md border border-line bg-raised px-2.5 py-2 text-left transition active:cursor-grabbing ${
-                    onCanvas ? "opacity-45" : "card-interactive"
+                  onClick={() => handleAddBlock(app)}
+                  title={
+                    onCanvas
+                      ? `${app.name} is already on the canvas`
+                      : `Add ${app.name} to the canvas — or drag it`
+                  }
+                  className={`flex items-center gap-2.5 rounded-md border border-line bg-raised px-2.5 py-2 text-left transition ${
+                    onCanvas
+                      ? "cursor-default opacity-40"
+                      : "card-interactive cursor-pointer active:cursor-grabbing"
                   }`}
                 >
                   <AppIcon app={app} />
                   <span className="min-w-0 flex-1 truncate text-[12px] text-ink">
                     {app.name}
                   </span>
+                  {/* Placed is a state, not a verdict, so the tick is neutral. */}
+                  {onCanvas ? (
+                    <svg
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                      className="h-3.5 w-3.5 shrink-0 text-ink-faint"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    >
+                      <path d="M5 12.5 9.5 17 19 7" />
+                    </svg>
+                  ) : (
+                    <svg
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                      className="h-3.5 w-3.5 shrink-0 text-ink-faint"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    >
+                      <path d="M12 5v14M5 12h14" />
+                    </svg>
+                  )}
                 </button>
               );
             })}

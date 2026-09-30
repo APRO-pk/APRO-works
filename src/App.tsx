@@ -1639,8 +1639,19 @@ function App() {
           </div>
         </header>
 
-        <main className="min-h-0 flex-1 overflow-y-auto scroll">
-          <div className="flex w-full flex-col gap-5 px-6 py-5">
+        <main className="flex min-h-0 flex-1 flex-col">
+          {/*
+           * Two layouts, because the screens want different things. Most sections are
+           * a stack of cards of their own height, so the container scrolls. Workflows
+           * is a canvas that should fill whatever is left — pinning it to a
+           * `calc(100vh - N)` guess left a strip of dead space at the bottom and
+           * broke as soon as the header changed size.
+           */}
+          <div
+            className={`flex min-h-0 flex-1 flex-col gap-5 px-6 py-5 ${
+              activeSection === "workflows" ? "" : "scroll overflow-y-auto"
+            }`}
+          >
             <SectionHeader
               title={activeCopy.title}
               actions={
@@ -1799,7 +1810,7 @@ function App() {
                 resetToken={workflowReset}
                 consoleOpen={workflowConsole}
                 onConsoleClose={() => setWorkflowConsole(false)}
-                className="h-[calc(100vh-260px)] min-h-[440px]"
+                className="min-h-0 flex-1"
               />
             )}
 

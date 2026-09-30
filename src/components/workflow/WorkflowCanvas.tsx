@@ -88,7 +88,11 @@ const CANVAS_THEME = {
   "--xy-selection-border": "1px dotted var(--color-accent)",
 } as CSSProperties;
 
-function toRfNode(node: WorkflowNode, graph: WorkflowGraph): AppNodeType {
+function toRfNode(
+  node: WorkflowNode,
+  graph: WorkflowGraph,
+  onRemove: () => void,
+): AppNodeType {
   const touching = graph.wires.filter(
     (wire) => wire.fromNode === node.id || wire.toNode === node.id,
   );
@@ -100,6 +104,7 @@ function toRfNode(node: WorkflowNode, graph: WorkflowGraph): AppNodeType {
       node,
       staleWires: touching.filter((wire) => wire.stale).length,
       wiredCount: touching.length,
+      onRemove,
     },
   };
 }
@@ -150,7 +155,9 @@ function CanvasInner({ graph, apps, onGraphChange, onReject }: Props) {
     setNodes((current) => {
       const existing = new Map(current.map((node) => [node.id, node]));
       return graph.nodes.map((node) => {
-        const fresh = toRfNode(node, graph);
+        const fresh = toRfNode(node, graph, () =>
+          onGraphChange(removeNode(graph, node.id)),
+        );
         const prior = existing.get(node.id);
         return prior
           ? { ...prior, data: fresh.data, position: node.position }
@@ -158,7 +165,7 @@ function CanvasInner({ graph, apps, onGraphChange, onReject }: Props) {
       });
     });
     setEdges(graph.wires.map(toRfEdge));
-  }, [graph, setNodes, setEdges]);
+  }, [graph, setNodes, setEdges, onGraphChange]);
 
   const handleConnect = useCallback(
     (connection: Connection) => {

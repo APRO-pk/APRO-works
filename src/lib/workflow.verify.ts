@@ -11,6 +11,7 @@
  */
 
 import {
+  addAppNode,
   addWire,
   buildPorts,
   checkConnection,
@@ -273,6 +274,54 @@ check(
     },
     APPS,
   ).nodes.some((node) => node.id === "node:gone" && node.name === "Stale Name"),
+);
+
+// ---------------------------------------------------------------- add and remove
+// Blocks can be placed and taken off the canvas. The interesting half is that a
+// removal is durable: reconcile re-adds apps the canvas has never seen, which is right
+// for a new install and wrong for a deliberate deletion.
+const busiest = graph.nodes
+  .map((node) => ({
+    node,
+    count: graph.wires.filter((w) => w.fromNode === node.id || w.toNode === node.id).length,
+  }))
+  .sort((a, b) => b.count - a.count)[0];
+const subject = busiest.node;
+const subjectApp = APPS.find((app) => app.slug === subject.appSlug)!;
+
+check("the fixture has a wired block to remove", busiest.count > 0, `wires=${busiest.count}`);
+
+const withoutSubject = removeNode(graph, subject.id);
+check(
+  "removing a block takes it off the canvas",
+  !withoutSubject.nodes.some((node) => node.id === subject.id),
+);
+check(
+  "removing a block removes every connection that touched it",
+  withoutSubject.wires.every(
+    (wire) => wire.fromNode !== subject.id && wire.toNode !== subject.id,
+  ),
+);
+check(
+  "a deliberately removed block is not put back by reconciliation",
+  !reconcileApps(withoutSubject, APPS).nodes.some((node) => node.id === subject.id),
+);
+check(
+  "placing a removed block again clears the removal",
+  reconcileApps(addAppNode(withoutSubject, subjectApp, { x: 40, y: 40 }), APPS).nodes.some(
+    (node) => node.id === subject.id,
+  ),
+);
+check(
+  "adding a block that is already on the canvas is a no-op",
+  addAppNode(graph, subjectApp, { x: 900, y: 900 }).nodes.filter(
+    (node) => node.appSlug === subjectApp.slug,
+  ).length === 1,
+);
+check(
+  "a graph saved before removals existed still reconciles",
+  reconcileApps({ ...graph, removedApps: undefined }, APPS).nodes.length ===
+    graph.nodes.length,
 );
 
 console.log(

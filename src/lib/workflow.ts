@@ -78,7 +78,26 @@ export type WorkflowGraph = {
   scope: "global" | "project";
   nodes: WorkflowNode[];
   wires: WorkflowWire[];
+  /**
+   * Apps the user has taken off the canvas on purpose.
+   *
+   * Without this, removing a block is not durable: `reconcileApps` adds any app the
+   * canvas has never seen, so a removed block comes straight back on the next load.
+   * That rule exists so a newly installed product shows up without pressing Reset,
+   * and it is the right rule — but "absent because it was never placed" and "absent
+   * because it was deliberately removed" are different states and had been collapsed
+   * into one.
+   *
+   * Optional in the type because graphs saved before this field existed do not have
+   * it; every read goes through `removedAppsOf`.
+   */
+  removedApps?: string[];
 };
+
+/** The deliberate removals, tolerating graphs saved before the field existed. */
+export function removedAppsOf(graph: WorkflowGraph): string[] {
+  return Array.isArray(graph.removedApps) ? graph.removedApps : [];
+}
 
 export type AppDescriptor = {
   slug: string;
@@ -389,10 +408,17 @@ export function setWireMode(graph: WorkflowGraph, wireId: string, mode: WireMode
 }
 
 export function removeNode(graph: WorkflowGraph, nodeId: string): WorkflowGraph {
+  const node = graph.nodes.find((entry) => entry.id === nodeId);
+  const removed = removedAppsOf(graph);
+
   return {
     ...graph,
-    nodes: graph.nodes.filter((node) => node.id !== nodeId),
+    nodes: graph.nodes.filter((entry) => entry.id !== nodeId),
     wires: graph.wires.filter((wire) => wire.fromNode !== nodeId && wire.toNode !== nodeId),
+    // Remember that this was deliberate, so reconciliation does not helpfully put it
+    // back on the next load.
+    removedApps:
+      node && !removed.includes(node.appSlug) ? [...removed, node.appSlug] : removed,
   };
 }
 
@@ -409,7 +435,12 @@ export function moveNode(
 
 export function addAppNode(graph: WorkflowGraph, app: AppDescriptor, position: { x: number; y: number }): WorkflowGraph {
   if (graph.nodes.some((node) => node.appSlug === app.slug)) return graph;
-  return { ...graph, nodes: [...graph.nodes, buildNode(app, undefined, position)] };
+  return {
+    ...graph,
+    nodes: [...graph.nodes, buildNode(app, undefined, position)],
+    // Placing it again is a clear statement that the earlier removal is over.
+    removedApps: removedAppsOf(graph).filter((slug) => slug !== app.slug),
+  };
 }
 
 /**
@@ -425,12 +456,16 @@ export function addAppNode(graph: WorkflowGraph, app: AppDescriptor, position: {
  *   would be invisible on the canvas until the user pressed Reset, which is not what
  *   "the apps you have" should mean.
  *
- * Positions of existing nodes, ports and wires are preserved. A node you delete comes
- * back on the next load; removing it from the canvas is not a way to uninstall it.
+ * Positions of existing nodes, ports and wires are preserved.
+ *
+ * An app the user deliberately removed is **not** put back. That distinction is the
+ * whole reason `removedApps` exists: reconciliation should recover from a graph that
+ * predates an app, not from a decision the user made.
  */
 export function reconcileApps(graph: WorkflowGraph, apps: AppDescriptor[]): WorkflowGraph {
   if (apps.length === 0) return graph;
   const bySlug = new Map(apps.map((app) => [app.slug, app]));
+  const removed = new Set(removedAppsOf(graph));
 
   const nodes = graph.nodes.map((node) => {
     const app = bySlug.get(node.appSlug);
@@ -441,7 +476,7 @@ export function reconcileApps(graph: WorkflowGraph, apps: AppDescriptor[]): Work
   const present = new Set(nodes.map((node) => node.appSlug));
   let nextY = nodes.reduce((lowest, node) => Math.max(lowest, node.position.y), 0) + 340;
   for (const app of apps) {
-    if (present.has(app.slug)) continue;
+    if (present.has(app.slug) || removed.has(app.slug)) continue;
     nodes.push(buildNode(app, undefined, { x: 40, y: nextY }));
     nextY += 340;
   }

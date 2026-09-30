@@ -32,6 +32,14 @@ export type AppNodeData = {
   staleWires: number;
   /** Total wires touching this node. */
   wiredCount: number;
+  /**
+   * Take this block off the canvas.
+   *
+   * Optional so the node still renders if it is ever mounted outside the canvas. The
+   * handler also removes every wire touching the node, so removing a block cannot
+   * leave a connection pointing at nothing.
+   */
+  onRemove?: () => void;
 };
 
 export type AppNodeType = Node<AppNodeData, "app">;
@@ -70,7 +78,7 @@ function PortRow({
 }
 
 export function AppNode({ data, selected }: NodeProps<AppNodeType>) {
-  const { node, staleWires, wiredCount } = data;
+  const { node, staleWires, wiredCount, onRemove } = data;
   const inputs = node.ports.filter((port) => port.direction === "in");
   const outputs = node.ports.filter((port) => port.direction === "out");
   const namespaceOk = isValidNamespace(node.appSlug);
@@ -106,6 +114,34 @@ export function AppNode({ data, selected }: NodeProps<AppNodeType>) {
           <span className="pill pill-stale shrink-0" title={`${staleWires} connection(s) out of date`}>
             STALE
           </span>
+        ) : null}
+
+        {onRemove ? (
+          /* `nodrag` stops React Flow treating the press as the start of a node drag,
+             and the propagation stops are the belt to that braces — without them the
+             node moves under the cursor and the click never lands. */
+          <button
+            type="button"
+            className="nodrag icon-btn icon-btn-danger shrink-0"
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onRemove();
+            }}
+            aria-label={`Remove ${node.name} from the workflow`}
+            title="Remove this block and its connections"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-3.5 w-3.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.9"
+              strokeLinecap="round"
+            >
+              <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
+          </button>
         ) : null}
       </div>
 
