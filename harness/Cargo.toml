@@ -1,0 +1,31 @@
+[workspace]
+
+[package]
+name = "apro-harness"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Verification harness: carries real aproCAD mass properties through the orchestration store into a real HexaDOF model import."
+
+# Platform crates: the orchestration layer under test.
+[dependencies]
+apro-store = { path = "../crates/apro-store" }
+apro-api = { path = "../crates/apro-api" }
+apro-client = { path = "../crates/apro-client" }
+
+# Producer: the real CAD application crates.
+apro-document = { path = "../../aproCAD/crates/document" }
+apro-massprops = { path = "../../aproCAD/crates/massprops" }
+apro-kernel = { path = "../../aproCAD/crates/kernel" }
+
+# Consumer: the real flight-dynamics application crates.
+hex-core = { path = "../../hexadof2/crates/hex-core" }
+hex-model = { path = "../../hexadof2/crates/hex-model" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ron = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+
+[dev-dependencies]
+tempfile = "3"

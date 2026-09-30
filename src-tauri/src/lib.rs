@@ -7,8 +7,12 @@ use std::{
     process::Command,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use zip::ZipArchive;
+
+mod store_host;
+
+use store_host::{StoreHost, StoreStatus};
 
 const LAUNCH_TICKET_TTL: Duration = Duration::from_secs(90);
 
@@ -299,18 +303,22 @@ fn cleanup_expired_launch_tickets() -> Result<(), String> {
     Ok(())
 }
 
-fn create_launch_ticket(slug: &str) -> Result<String, String> {
+/// Persist a launch ticket that the store's auth registry has already minted.
+///
+/// The token is produced by `StoreHost`, not here, so the value written to disk is the
+/// same one the API accepts when the product later exchanges it for a session. Previously
+/// this function invented a token that nothing ever validated.
+fn write_launch_ticket(slug: &str, token: &str, ttl: Duration) -> Result<(), String> {
     cleanup_expired_launch_tickets()?;
 
     let tickets_dir = launch_tickets_dir()?;
     fs::create_dir_all(&tickets_dir).map_err(|err| format!("Failed to prepare launch ticket directory: {err}"))?;
 
     let now = current_epoch_millis()?;
-    let token = format!("{slug}-{now:x}");
     let ticket = LaunchTicket {
-        token: token.clone(),
+        token: token.to_string(),
         product_slug: slug.to_string(),
-        expires_at_epoch_ms: now + LAUNCH_TICKET_TTL.as_millis(),
+        expires_at_epoch_ms: now + ttl.as_millis(),
     };
 
     let ticket_path = tickets_dir.join(format!("{token}.json"));
@@ -318,7 +326,7 @@ fn create_launch_ticket(slug: &str) -> Result<String, String> {
         serde_json::to_vec_pretty(&ticket).map_err(|err| format!("Failed to serialize launch ticket: {err}"))?;
     fs::write(&ticket_path, contents).map_err(|err| format!("Failed to write launch ticket: {err}"))?;
 
-    Ok(token)
+    Ok(())
 }
 
 fn stop_running_product_process(executable_path: &Path) -> Result<(), String> {
@@ -617,7 +625,12 @@ fn install_product_sync(app: AppHandle, slug: String, url: String, exe_path: Str
     })
 }
 
-fn launch_product_sync(slug: String, exe_path: String) -> Result<(), String> {
+fn launch_product_sync(
+    slug: String,
+    exe_path: String,
+    store_endpoint: String,
+    launch_token: String,
+) -> Result<(), String> {
     let executable_path = product_executable_path(&slug, &exe_path)?;
 
     if !executable_path.exists() {
@@ -628,14 +641,14 @@ fn launch_product_sync(slug: String, exe_path: String) -> Result<(), String> {
         .parent()
         .ok_or_else(|| format!("Unable to resolve launch directory for {}", executable_path.display()))?;
 
-    let launch_token = create_launch_ticket(&slug)?;
-
     Command::new(&executable_path)
         .current_dir(launch_dir)
         .arg("--apro-product-slug")
         .arg(&slug)
         .arg("--apro-launch-token")
         .arg(&launch_token)
+        .arg("--apro-store-endpoint")
+        .arg(&store_endpoint)
         .spawn()
         .map_err(|err| format!("Failed to launch product: {err}"))?;
 
@@ -705,10 +718,112 @@ async fn install_product(app: AppHandle, slug: String, url: String, exe_path: St
 }
 
 #[tauri::command]
-async fn launch_product(slug: String, exe_path: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || launch_product_sync(slug, exe_path))
-        .await
-        .map_err(|err| format!("Failed to launch product: {err}"))?
+async fn launch_product(
+    host: tauri::State<'_, StoreHost>,
+    slug: String,
+    exe_path: String,
+) -> Result<(), String> {
+    let store_endpoint = host.endpoint()?.to_string();
+    let launch_token = host.issue_launch_ticket(&slug)?;
+    write_launch_ticket(&slug, &launch_token, LAUNCH_TICKET_TTL)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        launch_product_sync(slug, exe_path, store_endpoint, launch_token)
+    })
+    .await
+    .map_err(|err| format!("Failed to launch product: {err}"))?
+}
+
+/// Current state of the local orchestration store, for the hub UI.
+#[tauri::command]
+fn get_store_status(host: tauri::State<'_, StoreHost>) -> StoreStatus {
+    host.status()
+}
+
+/// Insert the removable dummy dataset. Safe to expose in the UI: everything it writes
+/// carries a batch marker that `purge_store_demo` removes.
+#[tauri::command]
+fn seed_store_demo(
+    host: tauri::State<'_, StoreHost>,
+    force: bool,
+) -> Result<apro_store::demo::SeedReport, String> {
+    host.seed_demo(force)
+}
+
+/// Remove every seeded dummy artifact. Real data is never eligible.
+#[tauri::command]
+fn purge_store_demo(host: tauri::State<'_, StoreHost>) -> Result<apro_store::PurgeReport, String> {
+    host.purge_demo()
+}
+
+/// Recent orchestration events. `since` is a change cursor; 0 means "from the start".
+#[tauri::command]
+fn get_store_events(
+    host: tauri::State<'_, StoreHost>,
+    since: i64,
+    limit: u32,
+) -> Result<Vec<apro_store::EventRecord>, String> {
+    host.events(since, limit)
+}
+
+/// Every dependency edge, with its freshness computed from the graph.
+#[tauri::command]
+fn list_store_edges(
+    host: tauri::State<'_, StoreHost>,
+) -> Result<Vec<apro_store::EdgeSummary>, String> {
+    host.edges()
+}
+
+/// Every declared publish/consume contract, used to derive canvas ports.
+#[tauri::command]
+fn list_store_interfaces(
+    host: tauri::State<'_, StoreHost>,
+) -> Result<Vec<apro_store::DeclaredType>, String> {
+    host.interfaces()
+}
+
+/// Type-level subscriptions: what the workflow canvas wires.
+#[tauri::command]
+fn list_store_subscriptions(
+    host: tauri::State<'_, StoreHost>,
+) -> Result<Vec<apro_store::SubscriptionSummary>, String> {
+    host.subscriptions()
+}
+
+/// Apply one drawn wire. Materialises concrete edges for every existing instance.
+#[tauri::command]
+fn create_store_subscription(
+    host: tauri::State<'_, StoreHost>,
+    consumer_app: String,
+    type_id: String,
+    mode: String,
+) -> Result<apro_store::SubscriptionSummary, String> {
+    host.create_subscription(&consumer_app, &type_id, &mode)
+}
+
+/// Un-wire durably: removes the subscription and the edges it materialised.
+#[tauri::command]
+fn delete_store_subscription(
+    host: tauri::State<'_, StoreHost>,
+    subscription_id: String,
+) -> Result<u64, String> {
+    host.delete_subscription(&subscription_id)
+}
+
+/// Back-fill edges for instances published since a subscription was created.
+#[tauri::command]
+fn materialize_store_subscriptions(host: tauri::State<'_, StoreHost>) -> Result<u64, String> {
+    host.materialize_subscriptions()
+}
+
+/// The read log — what consumers actually pulled.
+#[tauri::command]
+fn get_store_access(
+    host: tauri::State<'_, StoreHost>,
+    since: i64,
+    limit: u32,
+) -> Result<Vec<apro_store::AccessRecord>, String> {
+    host.access_log(since, limit)
 }
 
 #[tauri::command]
@@ -724,12 +839,47 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            // Start the orchestration store. A failure is recorded rather than fatal,
+            // so the hub still opens and can report what went wrong.
+            let host = StoreHost::start();
+            let status = host.status();
+            if status.running {
+                println!(
+                    "APRO store listening on {} (data: {})",
+                    status.endpoint, status.data_dir
+                );
+            } else if let Some(error) = &status.error {
+                eprintln!("APRO store failed to start: {error}");
+            }
+            app.manage(host);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_product_status,
             install_product,
             launch_product,
-            uninstall_product
+            uninstall_product,
+            get_store_status,
+            seed_store_demo,
+            purge_store_demo,
+            get_store_events,
+            list_store_edges,
+            list_store_interfaces,
+            list_store_subscriptions,
+            create_store_subscription,
+            delete_store_subscription,
+            materialize_store_subscriptions,
+            get_store_access
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Requires an explicit quit; see DESIGN.md 7/R1. Closing the window hides it.
+            if let tauri::RunEvent::Exit = event {
+                if let Some(host) = app_handle.try_state::<StoreHost>() {
+                    host.shutdown();
+                }
+            }
+        });
 }

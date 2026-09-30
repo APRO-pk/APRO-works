@@ -1,0 +1,21 @@
+[package]
+name = "aproctl"
+description = "Operator CLI for the APRO Works orchestration store: serve, seed, purge, doctor, selftest."
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "aproctl"
+path = "src/main.rs"
+
+[dependencies]
+apro-store.workspace = true
+apro-api.workspace = true
+apro-client.workspace = true
+clap.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+dirs.workspace = true
+tempfile = "3"

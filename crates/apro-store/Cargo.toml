@@ -1,0 +1,19 @@
+[package]
+name = "apro-store"
+description = "APRO Works local orchestration store: artifacts, revisions, dependency graph, event log."
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+apro-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+hex.workspace = true
+dirs.workspace = true
+rusqlite.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
