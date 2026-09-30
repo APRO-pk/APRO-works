@@ -56,6 +56,42 @@ window is created hidden and revealed only by the interface, the result was no w
 no error at all. `run()` in `src-tauri/src/lib.rs` reveals the window on a timer as a
 second line of defence, so a frontend that never starts is visible rather than silent.
 
+### Signing updates (required to publish a release)
+
+The hub updates itself. The rail card downloads the new installer, checks it against the
+public key compiled into `src-tauri/tauri.conf.json`, and runs it. Nothing unsigned is
+ever installed, so every release must be signed.
+
+Two repository **secrets** are needed (Settings → Secrets and variables → Actions →
+Secrets; the Supabase values next door are variables, these are not):
+
+| Secret | Value |
+| --- | --- |
+| `TAURI_SIGNING_PRIVATE_KEY` | the contents of the private key file |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | the password it was generated with |
+
+To make a new pair:
+
+```powershell
+npm run tauri signer generate -- -w ~/.tauri/apro-works.key
+```
+
+Put the generated public key in `src-tauri/tauri.conf.json` and the private key in the
+secret above.
+
+**Losing the private key, or its password, means no already-installed copy can ever be
+updated again.** The updater refuses a release it cannot verify and offers no way to
+trust a new key from the client side; the only remedy is a manual reinstall by every
+user. Keep a copy somewhere durable that is not this repository.
+
+**Install with the NSIS setup, not the MSI.** The updater installs the NSIS package, and
+an update only replaces an installation made by the same installer. Install from the MSI
+and the first in-app update leaves two copies on the machine rather than one updated app.
+
+The release workflow builds `latest.json` beside the installers and verifies it was
+produced — a release without it is announced by the update check but refused by the
+installer, which is a confusing state to hand anyone.
+
 ```powershell
 # Install frontend deps and run the hub
 npm install

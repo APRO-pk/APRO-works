@@ -840,6 +840,8 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // Start the orchestration store. A failure is recorded rather than fatal,
             // so the hub still opens and can report what went wrong.

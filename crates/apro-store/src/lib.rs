@@ -6,7 +6,7 @@
 //! Payloads are opaque bytes owned by the publishing app; the store only understands
 //! the envelope (see `DESIGN.md` sections 2 and 5).
 //!
-//! ```
+//! ```text
 //! use apro_store::{Encoding, PushRequest, Selector, Store, StoreConfig, TypeId};
 //!
 //! let dir = tempfile::tempdir().unwrap();
@@ -21,6 +21,10 @@
 //! let fetched = store.pull(&type_id, "engine-a", Selector::Latest).unwrap().unwrap();
 //! assert_eq!(fetched.revision.revision_number, 1);
 //! ```
+//!
+//! The example above is run by `tests/round_trip.rs` rather than as a doctest, because a
+//! doctest here cannot link once the Tauri app crate is in the same workspace build. That
+//! file explains why in full — please read it before moving this back.
 
 pub mod blob;
 pub mod demo;

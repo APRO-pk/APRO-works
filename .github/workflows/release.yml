@@ -75,10 +75,16 @@ jobs:
       # Repo variables rather than secrets: a publishable key is designed to ship inside
       # the client, so hiding it buys nothing and only makes the failure harder to see.
       # Set them under Settings -> Secrets and variables -> Actions -> Variables.
+      #
+      # The signing key is what lets an installed copy trust the next release. It is a
+      # secret, not a variable, and losing it means never being able to update anyone who
+      # already has the app. The public half is committed in `tauri.conf.json`.
       - name: Build the hub
         env:
           VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build
 
       - name: Locate the build output
@@ -118,7 +124,47 @@ jobs:
 
           if (-not $setup -and -not $msi) { throw "The build produced neither an NSIS installer nor an MSI." }
 
-          Get-Item apro-works-win64.zip, apro-works-setup.exe, apro-works.msi -ErrorAction SilentlyContinue |
+          # The updater's manifest. An installed copy fetches this from
+          # `releases/latest/download/latest.json`, verifies the signature against the
+          # public key compiled into the binary, and installs whatever it names.
+          #
+          # It has to name the NSIS installer. That is the one the updater can run
+          # unattended, and an update only replaces an installation made by the same kind
+          # of installer — point an NSIS update at an MSI installation and you get two
+          # copies on the machine rather than one updated app.
+          if (-not $setup) { throw "No NSIS installer, so the updater has nothing to install." }
+          $signature = "$($setup.FullName).sig"
+          if (-not (Test-Path $signature)) {
+            throw "No signature at $signature — TAURI_SIGNING_PRIVATE_KEY was not set for the build."
+          }
+
+          $tag = "${{ github.ref_name }}"
+          if (-not $tag.StartsWith("v")) { $tag = "v$tag" }
+          $version = (Get-Content "package.json" -Raw | ConvertFrom-Json).version
+
+          $manifest = [ordered]@{
+            version   = $version
+            notes     = "See the release page for what changed."
+            pub_date  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{
+                signature = (Get-Content $signature -Raw).Trim()
+                url       = "https://github.com/APRO-pk/APRO-works/releases/download/$tag/apro-works-setup.exe"
+              }
+            }
+          }
+          # Written through .NET rather than `Set-Content -Encoding utf8`, because that
+          # encoding emits a BOM on Windows PowerShell and the updater's JSON parser
+          # rejects one. This is UTF-8 without a BOM on either edition of the shell.
+          $json = $manifest | ConvertTo-Json -Depth 6
+          [System.IO.File]::WriteAllText(
+            (Join-Path (Get-Location) "latest.json"),
+            $json,
+            (New-Object System.Text.UTF8Encoding $false)
+          )
+          "updater manifest published for $version"
+
+          Get-Item apro-works-win64.zip, apro-works-setup.exe, apro-works.msi, latest.json -ErrorAction SilentlyContinue |
             Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
 
       - name: Upload build artifact
@@ -130,6 +176,7 @@ jobs:
             apro-works-win64.zip
             apro-works-setup.exe
             apro-works.msi
+            latest.json
           if-no-files-found: error
 
       - name: Publish release
@@ -140,5 +187,6 @@ jobs:
             apro-works-win64.zip
             apro-works-setup.exe
             apro-works.msi
+            latest.json
           generate_release_notes: true
           fail_on_unmatched_files: true

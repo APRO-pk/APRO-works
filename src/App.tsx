@@ -23,9 +23,11 @@ import {
   cacheIsFresh,
   fetchUpdateStatus,
   formatCheckedAt,
+  installUpdate,
   loadCachedUpdate,
   openReleasePage,
   saveCachedUpdate,
+  type InstallProgress,
   type UpdateStatus,
 } from "./lib/updates";
 import logo from "../src-tauri/icons/icon.png";
@@ -1075,6 +1077,10 @@ function UpdateSettings({
   error,
   onCheck,
   onOpenRelease,
+  onInstall,
+  installing,
+  progress,
+  installError,
 }: {
   status: UpdateStatus | null;
   checkedAt: number | null;
@@ -1082,8 +1088,16 @@ function UpdateSettings({
   error: string | null;
   onCheck: () => void;
   onOpenRelease: () => void;
+  onInstall: () => void;
+  installing: boolean;
+  progress: InstallProgress | null;
+  installError: string | null;
 }) {
   const available = status?.available === true;
+  const percent =
+    progress && progress.total
+      ? Math.min(100, Math.round((progress.downloaded / progress.total) * 100))
+      : null;
 
   return (
     <div className="card p-4">
@@ -1113,24 +1127,47 @@ function UpdateSettings({
         </pre>
       ) : null}
 
+      {installing ? (
+        <div className="mt-4">
+          <div className="progress-track h-1.5">
+            <div className="progress-fill h-full" style={{ width: `${percent ?? 12}%` }} />
+          </div>
+          <p className="mt-2 text-[11.5px] leading-5 text-ink-dim">
+            {percent === null
+              ? "Downloading the update…"
+              : `${percent}% downloaded. APRO Works closes and restarts to finish.`}
+          </p>
+        </div>
+      ) : null}
+
+      {installError ? (
+        <div className="mt-3 rounded-md border border-bad/30 bg-bad/10 px-3 py-2.5 text-[12px] leading-5 text-ink">
+          {installError}
+        </div>
+      ) : null}
+
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={onCheck}
-          disabled={checking}
+          disabled={checking || installing}
           className="btn btn-quiet glow-swipe"
         >
           {checking ? "Checking…" : "Check now"}
         </button>
         {available ? (
-          <button type="button" onClick={onOpenRelease} className="btn btn-primary glow-swipe">
-            View release
+          <button
+            type="button"
+            onClick={onInstall}
+            disabled={installing}
+            className="btn btn-primary glow-swipe"
+          >
+            {installing ? "Installing…" : `Install ${status?.latest ?? "update"}`}
           </button>
-        ) : (
-          <button type="button" onClick={onOpenRelease} className="btn btn-ghost">
-            Release notes
-          </button>
-        )}
+        ) : null}
+        <button type="button" onClick={onOpenRelease} className="btn btn-ghost">
+          Release notes
+        </button>
       </div>
 
       <p className="mt-3 text-[11px] text-ink-faint">{formatCheckedAt(checkedAt)}</p>
@@ -1148,6 +1185,10 @@ function SettingsPanel({
   updateError,
   onCheckForUpdate,
   onOpenRelease,
+  onInstallUpdate,
+  updateInstalling,
+  updateProgress,
+  updateInstallError,
   onSignOut,
   signingOut,
 }: {
@@ -1160,6 +1201,10 @@ function SettingsPanel({
   updateError: string | null;
   onCheckForUpdate: () => void;
   onOpenRelease: () => void;
+  onInstallUpdate: () => void;
+  updateInstalling: boolean;
+  updateProgress: InstallProgress | null;
+  updateInstallError: string | null;
   onSignOut: () => void;
   signingOut: boolean;
 }) {
@@ -1217,6 +1262,10 @@ function SettingsPanel({
         error={updateError}
         onCheck={() => void onCheckForUpdate()}
         onOpenRelease={onOpenRelease}
+        onInstall={onInstallUpdate}
+        installing={updateInstalling}
+        progress={updateProgress}
+        installError={updateInstallError}
       />
     </section>
   );
@@ -1236,6 +1285,11 @@ function App() {
   const [updateCheckedAt, setUpdateCheckedAt] = useState<number | null>(null);
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  // Separate from the check above: installing is a different operation with a different
+  // failure mode, and conflating them would let a failed download read as a failed check.
+  const [updateInstalling, setUpdateInstalling] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState<InstallProgress | null>(null);
+  const [updateInstallError, setUpdateInstallError] = useState<string | null>(null);
   // Installed first: the common case is starting work, not shopping for software.
   const [activeSection, setActiveSection] = useState<SectionId>("installed-apps");
   const [searchQuery, setSearchQuery] = useState("");
@@ -1491,6 +1545,39 @@ function App() {
       setUpdateError(error instanceof Error ? error.message : String(error));
     } finally {
       setUpdateChecking(false);
+    }
+  }
+
+  /**
+   * Download and install the release that the check reported.
+   *
+   * The check above decides whether to *offer* an update; the updater plugin decides
+   * whether one can be *installed*. They can disagree — the GitHub API knows a release
+   * exists, only `latest.json` says it carries something installable — so this reports
+   * what the install path actually said instead of trusting the earlier answer.
+   */
+  async function handleInstallUpdate() {
+    setUpdateInstalling(true);
+    setUpdateInstallError(null);
+    setUpdateProgress(null);
+
+    try {
+      await installUpdate(setUpdateProgress);
+      // Windows exits the process partway through the install, so arriving here means
+      // this platform did not: the update is on disk and only a restart is left.
+      setSnackbar({
+        visible: true,
+        title: "Update installed",
+        detail: "Restart APRO Works to finish.",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setUpdateInstallError(message);
+      // The rail card is the likely entry point, and it is not the Settings panel, so
+      // without this the failure would only be visible on a screen the user is not on.
+      setSnackbar({ visible: true, title: "Update failed", detail: message });
+    } finally {
+      setUpdateInstalling(false);
     }
   }
 
@@ -1818,18 +1905,21 @@ function App() {
           {update?.available ? (
             <button
               type="button"
-              onClick={() => void openReleasePage(update)}
+              onClick={() => void handleInstallUpdate()}
+              disabled={updateInstalling}
               title={update.detail}
               className="card card-interactive glow-swipe mb-2 flex w-full flex-col items-start gap-1.5 border-accent/40 bg-accent-soft px-2.5 py-2.5 text-left"
             >
               <span className="pill pill-accent">
                 <span className="pill-dot" />
-                Update
+                {updateInstalling ? "Installing" : "Update"}
               </span>
               <span className="text-[12px] font-semibold text-ink">
                 APRO Works {update.latest}
               </span>
-              <span className="text-[10px] text-ink-dim">View release</span>
+              <span className="text-[10px] text-ink-dim">
+                {updateInstalling ? "Downloading…" : "Click to install"}
+              </span>
             </button>
           ) : null}
 
@@ -2106,6 +2196,10 @@ function App() {
                 updateError={updateError}
                 onCheckForUpdate={handleCheckForUpdate}
                 onOpenRelease={() => void openReleasePage(update)}
+                onInstallUpdate={() => void handleInstallUpdate()}
+                updateInstalling={updateInstalling}
+                updateProgress={updateProgress}
+                updateInstallError={updateInstallError}
                 onSignOut={() => void handleSignOut()}
                 signingOut={signingOut}
               />

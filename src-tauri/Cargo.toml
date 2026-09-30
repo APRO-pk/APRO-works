@@ -20,6 +20,15 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+# In-app updates. The updater can only replace an installation that it, or a build
+# carrying it, put there — so it has to ship in the same release that introduces it, and
+# every release after this one is a click rather than a download.
+#
+# The artifacts it installs are signed with a key whose public half is in
+# `tauri.conf.json`. Losing the private key means never being able to update an already
+# installed copy again.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 dirs = "6"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
