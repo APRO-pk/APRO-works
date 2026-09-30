@@ -1,6 +1,6 @@
 [package]
 name = "apro-works"
-version = "0.1.1"
+version = "0.2.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -31,3 +31,12 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 apro-store = { path = "../crates/apro-store" }
 apro-api = { path = "../crates/apro-api" }
 apro-client.workspace = true
+
+[features]
+# Production builds.
+#
+# The `tauri` crate's build script computes `dev = !custom_protocol`. This app has a
+# `devUrl`, so without this a release build still points at the dev server — on launch
+# that is "localhost refused to connect", not a blank window. Declaring the feature is
+# what lets the Tauri CLI and the release workflow turn production mode on explicitly.
+custom-protocol = ["tauri/custom-protocol"]

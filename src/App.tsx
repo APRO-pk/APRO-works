@@ -19,6 +19,15 @@ import {
   saveAccentId,
   type AccentId,
 } from "./lib/theme";
+import {
+  cacheIsFresh,
+  fetchUpdateStatus,
+  formatCheckedAt,
+  loadCachedUpdate,
+  openReleasePage,
+  saveCachedUpdate,
+  type UpdateStatus,
+} from "./lib/updates";
 import logo from "../src-tauri/icons/icon.png";
 import burnBackground from "./assets/burnAndGeometry.png";
 import hexadofBackground from "./assets/hexadof.png";
@@ -1008,16 +1017,105 @@ function DownloadsPanel({
   );
 }
 
+/**
+ * Update status and the manual check.
+ *
+ * The automatic check is silent by design, so this is where a user can see when it
+ * last ran and force one. It is also the only place a failure is reported: the user
+ * asked, so silence would be wrong here.
+ */
+function UpdateSettings({
+  status,
+  checkedAt,
+  checking,
+  error,
+  onCheck,
+  onOpenRelease,
+}: {
+  status: UpdateStatus | null;
+  checkedAt: number | null;
+  checking: boolean;
+  error: string | null;
+  onCheck: () => void;
+  onOpenRelease: () => void;
+}) {
+  const available = status?.available === true;
+
+  return (
+    <div className="card p-4">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <p className="label">Updates</p>
+        {available ? (
+          <span className="pill pill-accent">Update available</span>
+        ) : status ? (
+          <span className="pill pill-fresh">Up to date</span>
+        ) : null}
+      </div>
+
+      <h3 className="mt-2 flex items-baseline gap-2 text-[15px] font-semibold tracking-tight text-ink">
+        APRO Works
+        <span className="mono text-[13px] font-normal text-ink-dim">
+          {status?.current ?? "…"}
+        </span>
+      </h3>
+
+      <p className="mt-2 max-w-[60ch] text-[12px] leading-5 text-ink-dim">
+        {error ?? status?.detail ?? "Checking for a newer release…"}
+      </p>
+
+      {available && status?.notes ? (
+        <pre className="well mt-3 max-h-[168px] overflow-y-auto scroll whitespace-pre-wrap px-3 py-2.5 font-sans text-[11.5px] leading-5 text-ink-dim">
+          {status.notes}
+        </pre>
+      ) : null}
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={onCheck}
+          disabled={checking}
+          className="btn btn-quiet glow-swipe"
+        >
+          {checking ? "Checking…" : "Check now"}
+        </button>
+        {available ? (
+          <button type="button" onClick={onOpenRelease} className="btn btn-primary glow-swipe">
+            View release
+          </button>
+        ) : (
+          <button type="button" onClick={onOpenRelease} className="btn btn-ghost">
+            Release notes
+          </button>
+        )}
+      </div>
+
+      <p className="mt-3 text-[11px] text-ink-faint">{formatCheckedAt(checkedAt)}</p>
+    </div>
+  );
+}
+
 function SettingsPanel({
   member,
   accentId,
   onAccentChange,
+  update,
+  updateCheckedAt,
+  updateChecking,
+  updateError,
+  onCheckForUpdate,
+  onOpenRelease,
   onSignOut,
   signingOut,
 }: {
   member: MemberRecord;
   accentId: AccentId;
   onAccentChange: (id: AccentId) => void;
+  update: UpdateStatus | null;
+  updateCheckedAt: number | null;
+  updateChecking: boolean;
+  updateError: string | null;
+  onCheckForUpdate: () => void;
+  onOpenRelease: () => void;
   onSignOut: () => void;
   signingOut: boolean;
 }) {
@@ -1067,6 +1165,15 @@ function SettingsPanel({
           {signingOut ? "Signing out…" : "Sign Out"}
         </button>
       </div>
+
+      <UpdateSettings
+        status={update}
+        checkedAt={updateCheckedAt}
+        checking={updateChecking}
+        error={updateError}
+        onCheck={() => void onCheckForUpdate()}
+        onOpenRelease={onOpenRelease}
+      />
     </section>
   );
 }
@@ -1081,6 +1188,10 @@ function App() {
   const [loginPassword, setLoginPassword] = useState("");
   const [signingOut, setSigningOut] = useState(false);
   const [accentId, setAccentId] = useState<AccentId>(() => loadAccentId());
+  const [update, setUpdate] = useState<UpdateStatus | null>(null);
+  const [updateCheckedAt, setUpdateCheckedAt] = useState<number | null>(null);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
   // Installed first: the common case is starting work, not shopping for software.
   const [activeSection, setActiveSection] = useState<SectionId>("installed-apps");
   const [searchQuery, setSearchQuery] = useState("");
@@ -1257,6 +1368,58 @@ function App() {
   useEffect(() => {
     applyAccent(accentId);
   }, [accentId]);
+
+  /**
+   * Check for a newer release once per launch.
+   *
+   * A stored answer is shown straight away and the network is only consulted when that
+   * answer is old, so the sidebar card is right immediately rather than appearing a
+   * second after the window opens.
+   *
+   * A failed check is swallowed. Being offline is not something to interrupt anyone
+   * about, and whatever was cached stays on screen; the manual check in Settings is
+   * where a failure is actually reported, because there the user asked for it.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    const cached = loadCachedUpdate();
+
+    if (cached) {
+      setUpdate(cached.status);
+      setUpdateCheckedAt(cached.at);
+    }
+    if (cacheIsFresh(cached)) return;
+
+    void (async () => {
+      try {
+        const fresh = await fetchUpdateStatus();
+        if (cancelled) return;
+        setUpdate(fresh);
+        setUpdateCheckedAt(saveCachedUpdate(fresh).at);
+      } catch {
+        // Offline, rate-limited, or no releases yet. Nothing to say.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** The explicit check, which always asks and always reports what happened. */
+  async function handleCheckForUpdate() {
+    setUpdateChecking(true);
+    setUpdateError(null);
+    try {
+      const fresh = await fetchUpdateStatus();
+      setUpdate(fresh);
+      setUpdateCheckedAt(saveCachedUpdate(fresh).at);
+    } catch (error) {
+      setUpdateError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setUpdateChecking(false);
+    }
+  }
 
   function handleAccentChange(id: AccentId) {
     setAccentId(id);
@@ -1567,6 +1730,26 @@ function App() {
         </nav>
 
         <div className="shrink-0 px-2 pb-2">
+          {/* An available release sits above everything else in the rail: it is the one
+              item here that is time-sensitive, and it disappears once installed. */}
+          {update?.available ? (
+            <button
+              type="button"
+              onClick={() => void openReleasePage(update)}
+              title={update.detail}
+              className="card card-interactive glow-swipe mb-2 flex w-full flex-col items-start gap-1.5 border-accent/40 bg-accent-soft px-2.5 py-2.5 text-left"
+            >
+              <span className="pill pill-accent">
+                <span className="pill-dot" />
+                Update
+              </span>
+              <span className="text-[12px] font-semibold text-ink">
+                APRO Works {update.latest}
+              </span>
+              <span className="text-[10px] text-ink-dim">View release</span>
+            </button>
+          ) : null}
+
           <div className="divider mb-2" />
           <button
             type="button"
@@ -1834,6 +2017,12 @@ function App() {
                 member={member}
                 accentId={accentId}
                 onAccentChange={handleAccentChange}
+                update={update}
+                updateCheckedAt={updateCheckedAt}
+                updateChecking={updateChecking}
+                updateError={updateError}
+                onCheckForUpdate={handleCheckForUpdate}
+                onOpenRelease={() => void openReleasePage(update)}
                 onSignOut={() => void handleSignOut()}
                 signingOut={signingOut}
               />

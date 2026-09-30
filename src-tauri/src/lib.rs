@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use zip::ZipArchive;
 
 mod store_host;
+mod update;
 
 use store_host::{StoreHost, StoreStatus};
 
@@ -870,7 +871,8 @@ pub fn run() {
             create_store_subscription,
             delete_store_subscription,
             materialize_store_subscriptions,
-            get_store_access
+            get_store_access,
+            update::check_for_update
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
