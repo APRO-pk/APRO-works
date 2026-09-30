@@ -761,7 +761,7 @@ function LaunchCard({
 }) {
   return (
     <article
-      className="card-art card-art rise flex min-h-[224px] flex-col p-4"
+      className="card-art card-art rise flex min-h-[244px] flex-col p-4"
       style={{ animationDelay: `${index * 60}ms` }}
     >
       {product.backgroundImage ? (
@@ -773,12 +773,16 @@ function LaunchCard({
       <div className="card-art-wash" />
       <div className="card-art-scrim" />
 
-      <div className="relative flex flex-1 flex-col items-center justify-center gap-3 px-2">
-        <div className="flex h-14 w-14 items-center justify-center rounded-lg border border-line-strong bg-canvas/45 backdrop-blur-md">
+      <div className="relative flex flex-1 flex-col items-center justify-center gap-4 px-2">
+        <div className="flex h-24 w-24 items-center justify-center">
           {product.iconImage ? (
-            <img src={product.iconImage} alt="" className="h-9 w-9 object-contain" />
+            <img
+              src={product.iconImage}
+              alt=""
+              className="h-full w-full object-contain drop-shadow-lg"
+            />
           ) : (
-            <span className="text-[17px] font-semibold tracking-tight text-ink">
+            <span className="text-[40px] font-semibold tracking-tight text-ink-dim drop-shadow-lg">
               {initialsFromName(product.name)}
             </span>
           )}
