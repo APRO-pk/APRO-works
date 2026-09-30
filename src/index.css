@@ -134,6 +134,18 @@ input::placeholder {
   opacity: 1;
 }
 
+/**
+ * Hide WebView2's built-in password reveal button.
+ *
+ * Chromium draws it in a fixed dark grey that cannot be recoloured, so on this
+ * surface it is close to invisible — which is exactly the complaint. It is replaced by
+ * the component's own toggle, which draws from the token palette and is focusable and
+ * labelled for assistive technology.
+ */
+input[type="password"]::-ms-reveal {
+  display: none;
+}
+
 :focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;

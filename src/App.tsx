@@ -269,6 +269,12 @@ function LoginScreen({
   loading: boolean;
   error: string;
 }) {
+  /**
+   * Local to the form, and deliberately so: it is view state that should reset every
+   * time the screen is reached, not something the rest of the app has an opinion about.
+   */
+  const [showPassword, setShowPassword] = useState(false);
+
   return (
     <div className="app-canvas relative flex h-screen items-center justify-center overflow-hidden px-6 text-ink">
       <div className="ambient-bloom" aria-hidden="true" />
@@ -312,14 +318,50 @@ function LoginScreen({
 
             <label className="block">
               <span className="label mb-1.5 block">Password</span>
-              <input
-                type="password"
-                value={password}
-                onChange={(event) => onPasswordChange(event.target.value)}
-                placeholder="••••••••"
-                className="field w-full px-3 py-2.5 text-[13px] outline-none placeholder:text-ink-faint"
-                required
-              />
+              {/* The focus ring lives on the wrapper so it encloses the toggle too. */}
+              <div className="field flex items-center gap-1 pr-1">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(event) => onPasswordChange(event.target.value)}
+                  placeholder="••••••••"
+                  autoComplete="current-password"
+                  className="w-full min-w-0 bg-transparent px-3 py-2.5 text-[13px] text-ink outline-none placeholder:text-ink-faint"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((shown) => !shown)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  aria-pressed={showPassword}
+                  title={showPassword ? "Hide password" : "Show password"}
+                  className="icon-btn shrink-0 text-ink-dim hover:text-ink"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="h-4 w-4"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.7"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    {showPassword ? (
+                      <>
+                        <path d="M3 3 21 21" />
+                        <path d="M10.6 6.1A10 10 0 0 1 12 6c6 0 9.5 6 9.5 6a17.6 17.6 0 0 1-3.4 4" />
+                        <path d="M6.4 7A17.4 17.4 0 0 0 2.5 12s3.5 6 9.5 6a9.9 9.9 0 0 0 3.6-.6" />
+                        <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+                      </>
+                    ) : (
+                      <>
+                        <path d="M2.5 12S6 6 12 6s9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+                        <circle cx="12" cy="12" r="3.2" />
+                      </>
+                    )}
+                  </svg>
+                </button>
+              </div>
             </label>
 
             {error ? (
