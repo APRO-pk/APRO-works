@@ -70,24 +70,45 @@ jobs:
       - name: Build the hub
         run: npm run tauri build
 
-      - name: Collect the installers
+      - name: Locate the build output
+        id: target
         shell: pwsh
         run: |
-          $bundle = "src-tauri/target/release/bundle"
-          Get-ChildItem -Recurse $bundle -Include *.msi, *.exe -File |
-            Select-Object FullName, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
+          # The Cargo workspace root is the repository root, so cargo's `target/` sits
+          # beside `src-tauri/`, not inside it. Asking cargo instead of hardcoding
+          # means this cannot drift if the workspace layout changes.
+          $target = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).target_directory
+          if (-not (Test-Path $target)) { throw "cargo reported a target directory that does not exist: $target" }
+          "dir=$target" >> $env:GITHUB_OUTPUT
+          "target directory: $target"
 
-      - name: Stage the portable build
+      - name: Stage the release assets
         shell: pwsh
         run: |
-          # Alongside the installers, a zip that runs from anywhere. Some sites cannot
-          # run an installer, and this is also what makes the release useful to anyone
-          # who just wants to look at the app.
+          $target = "${{ steps.target.outputs.dir }}"
+          $release = Join-Path $target "release"
+
+          # A zip that runs from anywhere, alongside the installers. Some sites cannot
+          # run an installer, and it also makes the release useful to anyone who just
+          # wants to look at the app.
           $stage = "dist/APRO-Works-Windows"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          Copy-Item "src-tauri/target/release/apro-works.exe" $stage
+          Copy-Item (Join-Path $release "apro-works.exe") $stage
           Compress-Archive -Path $stage -DestinationPath "apro-works-win64.zip" -Force
-          Get-Item "apro-works-win64.zip" | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
+
+          # Renamed without spaces so the download URLs are usable as-is.
+          $bundle = Join-Path $release "bundle"
+          if (-not (Test-Path $bundle)) { throw "No bundle directory at $bundle. The build did not produce installers." }
+
+          $setup = Get-ChildItem (Join-Path $bundle "nsis") -Filter *.exe -File | Select-Object -First 1
+          if ($setup) { Copy-Item $setup.FullName "apro-works-setup.exe" }
+          $msi = Get-ChildItem (Join-Path $bundle "msi") -Filter *.msi -File | Select-Object -First 1
+          if ($msi) { Copy-Item $msi.FullName "apro-works.msi" }
+
+          if (-not $setup -and -not $msi) { throw "The build produced neither an NSIS installer nor an MSI." }
+
+          Get-Item apro-works-win64.zip, apro-works-setup.exe, apro-works.msi -ErrorAction SilentlyContinue |
+            Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
 
       - name: Upload build artifact
         if: github.event_name == 'workflow_dispatch'
@@ -96,8 +117,8 @@ jobs:
           name: apro-works-win64
           path: |
             apro-works-win64.zip
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/msi/*.msi
+            apro-works-setup.exe
+            apro-works.msi
           if-no-files-found: error
 
       - name: Publish release
@@ -106,7 +127,7 @@ jobs:
         with:
           files: |
             apro-works-win64.zip
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/msi/*.msi
+            apro-works-setup.exe
+            apro-works.msi
           generate_release_notes: true
           fail_on_unmatched_files: true
