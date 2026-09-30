@@ -299,10 +299,6 @@ export function WorkflowsPanel({
             {drafts.length} draft — apply to save
           </button>
         ) : null}
-
-        <span className="ml-auto hidden text-[11px] text-ink-faint lg:block">
-          Drag a block onto the canvas, then wire its output to another block's input.
-        </span>
       </div>
 
       <div className="flex min-h-0 flex-1 gap-3">
