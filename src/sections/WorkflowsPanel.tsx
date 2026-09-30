@@ -68,14 +68,14 @@ function AppIcon({ app, size = 26 }: { app: AppDescriptor; size?: number }) {
         src={app.icon}
         alt=""
         draggable={false}
-        className="shrink-0 rounded-lg object-cover"
+        className="shrink-0 rounded-md object-cover"
         style={{ width: size, height: size }}
       />
     );
   }
   return (
     <span
-      className="flex shrink-0 items-center justify-center rounded-lg bg-white/8 text-[9px] font-semibold uppercase text-white/50"
+      className="label flex shrink-0 items-center justify-center rounded-md border border-line bg-raised text-ink-dim"
       style={{ width: size, height: size }}
     >
       {app.name.replace(/[^A-Za-z]/g, "").slice(0, 2)}
@@ -237,27 +237,28 @@ export function WorkflowsPanel({
   if (!graph) {
     return (
       <div className={`flex items-center justify-center ${className}`}>
-        <span className="text-[12px] text-white/40">Preparing workflow…</span>
+        <span className="text-[12px] text-ink-dim">Preparing workflow…</span>
       </div>
     );
   }
 
   return (
     <div className={`relative flex min-h-0 flex-col gap-3 ${className}`}>
+      {/* The store being unreachable is a genuinely worse state than reading it live:
+          wiring is disabled, so the warn colour is earned here. */}
       {dataSource === "demo" ? (
-        <div className="rounded-xl border border-[rgba(255,183,94,0.22)] bg-[rgba(255,183,94,0.08)] px-4 py-2 text-[11px] text-[rgba(255,205,140,0.92)]">
-          Showing <strong className="font-semibold">sample data</strong> — the orchestration store
-          is not reachable{dataError ? ` (${dataError})` : ""}. Wiring is disabled.
+        <div className="card px-4 py-2 text-[11px] text-ink-dim">
+          Showing <strong className="font-semibold text-warn">sample data</strong> — the
+          orchestration store is not reachable{dataError ? ` (${dataError})` : ""}. Wiring is
+          disabled.
         </div>
       ) : null}
 
       <div className="flex min-h-0 flex-1 gap-3">
         {/* palette */}
-        <aside className="panel-soft flex w-[182px] shrink-0 flex-col rounded-2xl p-2.5">
-          <div className="px-1 pb-2 text-[9px] uppercase tracking-[0.18em] text-white/32">
-            Software blocks
-          </div>
-          <div className="flex flex-col gap-1.5 overflow-y-auto">
+        <aside className="card flex w-[182px] shrink-0 flex-col p-2.5">
+          <div className="label px-1 pb-2">Software blocks</div>
+          <div className="scroll flex flex-col gap-1.5 overflow-y-auto">
             {apps.map((app) => {
               const onCanvas = graph.nodes.some((node) => node.appSlug === app.slug);
               return (
@@ -270,12 +271,12 @@ export function WorkflowsPanel({
                     event.dataTransfer.effectAllowed = "move";
                   }}
                   title={app.name}
-                  className={`panel-raised flex cursor-grab items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition active:cursor-grabbing ${
-                    onCanvas ? "opacity-45" : "hover:brightness-110"
+                  className={`flex cursor-grab items-center gap-2.5 rounded-md border border-line bg-raised px-2.5 py-2 text-left transition active:cursor-grabbing ${
+                    onCanvas ? "opacity-45" : "card-interactive"
                   }`}
                 >
                   <AppIcon app={app} />
-                  <span className="min-w-0 flex-1 truncate text-[12px] text-white/84">
+                  <span className="min-w-0 flex-1 truncate text-[12px] text-ink">
                     {app.name}
                   </span>
                 </button>
@@ -285,7 +286,7 @@ export function WorkflowsPanel({
         </aside>
 
         {/* canvas */}
-        <div className="panel-inset min-w-0 flex-1 overflow-hidden rounded-2xl">
+        <div className="well min-w-0 flex-1 overflow-hidden">
           <WorkflowCanvas
             graph={graph}
             apps={apps}
@@ -295,34 +296,31 @@ export function WorkflowsPanel({
         </div>
 
         {/* connections */}
-        <aside className="panel-soft flex w-[268px] shrink-0 flex-col rounded-2xl">
-          <div className="flex items-center gap-2 border-b border-white/6 px-3 py-2">
-            <span className="text-[9px] uppercase tracking-[0.18em] text-white/32">Connections</span>
+        <aside className="card flex w-[268px] shrink-0 flex-col">
+          <div className="flex items-center gap-2 border-b border-line px-3 py-2">
+            <span className="label">Connections</span>
             <div className="ml-auto flex items-center gap-1.5">
               {drafts.length > 0 ? (
                 <>
-                  <span className="rounded-md bg-white/8 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-white/44">
-                    {drafts.length} draft
-                  </span>
+                  {/* A count of un-applied wires is neither good nor bad: neutral. */}
+                  <span className="pill">{drafts.length} draft</span>
                   <button
                     type="button"
                     onClick={() => void handleApply()}
                     disabled={busy}
-                    className="rounded-lg bg-[rgba(128,154,255,0.2)] px-2 py-0.5 text-[10px] font-medium text-white/92 transition hover:bg-[rgba(128,154,255,0.3)] disabled:opacity-50"
+                    className="btn btn-primary"
                   >
                     {busy ? "…" : "Apply"}
                   </button>
                 </>
               ) : (
-                <span className="text-[9px] uppercase tracking-wider text-[rgba(150,235,190,0.7)]">
-                  saved
-                </span>
+                <span className="pill">saved</span>
               )}
             </div>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
+          <div className="scroll min-h-0 flex-1 overflow-y-auto p-2.5">
             {graph.wires.length === 0 ? (
-              <div className="px-1 py-4 text-[11px] text-white/36">No connections yet.</div>
+              <div className="px-1 py-4 text-[11px] text-ink-faint">No connections yet.</div>
             ) : (
               <ul className="flex flex-col gap-2">
                 {graph.wires.map((wire) => (
@@ -343,7 +341,7 @@ export function WorkflowsPanel({
       </div>
 
       {toast ? (
-        <div className="panel-raised pointer-events-none absolute bottom-4 left-1/2 z-20 max-w-[520px] -translate-x-1/2 rounded-xl px-4 py-2.5 text-[11.5px] text-white/86 shadow-2xl">
+        <div className="card pointer-events-none absolute bottom-4 left-1/2 z-20 max-w-[520px] -translate-x-1/2 border-line-strong px-4 py-2.5 text-[12px] text-ink">
           {toast}
         </div>
       ) : null}
@@ -372,19 +370,19 @@ function ConnectionRow({
   const state = wire.stale ? "stale" : wire.applied ? "live" : "draft";
 
   return (
-    <li className="panel-inset rounded-xl px-2.5 py-2">
+    <li className="well px-2.5 py-2">
       <div className="flex items-center gap-1.5">
-        <span className="truncate text-[11px] text-white/82">{fromName}</span>
-        <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0 text-white/30" fill="none" stroke="currentColor" strokeWidth="2">
+        <span className="truncate text-[11px] text-ink">{fromName}</span>
+        <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0 text-ink-faint" fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M5 12h14M13 6l6 6-6 6" />
         </svg>
-        <span className="truncate text-[11px] text-white/82">{toName}</span>
+        <span className="truncate text-[11px] text-ink">{toName}</span>
         <button
           type="button"
           onClick={onRemove}
           aria-label="Remove connection"
           title={wire.applied ? "Un-wire: removes the subscription and its edges" : "Discard this draft"}
-          className="ml-auto shrink-0 rounded-md p-0.5 text-white/28 transition hover:text-[rgba(255,160,160,0.95)]"
+          className="icon-btn ml-auto shrink-0"
         >
           <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9">
             <path d="M6 6l12 12M18 6 6 18" />
@@ -392,7 +390,7 @@ function ConnectionRow({
         </button>
       </div>
 
-      <div className="mt-1 truncate text-[10px] text-white/40" title={wire.toTypeId}>
+      <div className="mt-1 truncate text-[10px] text-ink-faint" title={wire.toTypeId}>
         {type.label}
         {wire.applied && edgeCount !== undefined
           ? ` · ${edgeCount} instance${edgeCount === 1 ? "" : "s"}`
@@ -405,7 +403,7 @@ function ConnectionRow({
           onChange={(event) => onMode(event.target.value as WireMode)}
           title={MODE_HINT[wire.mode]}
           disabled={wire.applied}
-          className="rounded-md border border-white/8 bg-[rgba(12,16,24,0.9)] px-1.5 py-0.5 text-[10px] text-white/72 outline-none disabled:opacity-50"
+          className="field px-1.5 py-0.5 text-[10px] text-ink-dim disabled:opacity-50"
         >
           {MODES.map((mode) => (
             <option key={mode} value={mode}>
@@ -413,13 +411,11 @@ function ConnectionRow({
             </option>
           ))}
         </select>
+        {/* stale = a wire whose consumer is behind its producer (fewer is better);
+            live = the wire is registered and satisfied; draft = neutral. */}
         <span
-          className={`rounded-md px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${
-            state === "stale"
-              ? "bg-[rgba(255,183,94,0.16)] text-[rgba(255,205,140,0.95)]"
-              : state === "live"
-                ? "bg-[rgba(122,226,168,0.14)] text-[rgba(150,235,190,0.95)]"
-                : "bg-white/8 text-white/44"
+          className={`pill ${
+            state === "stale" ? "pill-stale" : state === "live" ? "pill-fresh" : ""
           }`}
           title={
             state === "stale"

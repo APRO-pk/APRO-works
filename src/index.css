@@ -1,10 +1,79 @@
 @import "tailwindcss";
 
+/* ============================================================================
+   APRO Works — design tokens
+   ============================================================================
+
+   Everything visual is defined here and nowhere else. Components reference
+   tokens (`bg-surface`, `text-ink-dim`, `rounded-card`); they never carry a raw
+   hex value. `npm run verify:tokens` enforces that, because a colour literal
+   buried in a component is invisible until someone tries to change the theme.
+
+   The look: near-black layered surfaces, hairline borders, one accent, and a
+   wide type range from a 10px tracked label to a 36px metric. Deliberately
+   flat — the previous theme stacked three to five gradients and up to six inset
+   shadows per panel, which read as heavy on a desktop that is already dark.
+
+   Colour carries meaning or it does not appear. See `--color-good` below.
+   ========================================================================= */
+
+@theme {
+  /* ---- surfaces: four levels, darkest first ---------------------------- */
+  --color-canvas: #08090b;
+  --color-surface: #0e1014;
+  --color-raised: #16191e;
+  --color-inset: #0a0b0e;
+
+  /* ---- hairlines ------------------------------------------------------- */
+  --color-line: #ffffff14;
+  --color-line-strong: #ffffff26;
+
+  /* Modal scrim. A token rather than `bg-black/60` so dimming is consistent and
+     adjustable in one place. */
+  --color-scrim: #000000a6;
+
+  /* ---- ink -------------------------------------------------------------
+     Every level is checked against the three surfaces it can appear on. The
+     check is machine-run (`npm run verify:tokens`) because a contrast
+     regression is invisible in review and obvious to a user squinting at a
+     label. `ink-faint` is deliberately as light as it can be while still
+     clearing WCAG AA on the lightest surface. */
+  --color-ink: #f2f4f7;
+  --color-ink-dim: #99a1ad;
+  --color-ink-faint: #7b8391;
+
+  /* ---- the single accent ----------------------------------------------
+     One accent for the whole application. It marks the primary action and
+     the active state, and nothing else. Change this line to re-brand. */
+  --color-accent: #ff6b1a;
+  --color-accent-hover: #ff8340;
+  --color-accent-soft: #ff6b1a1f;
+
+  /* ---- status: semantic, never decorative ------------------------------
+     These mean "better" and "worse", so they may only be used where that is
+     genuinely true. In this application that is a short list: fewer stale
+     edges, fewer failed installs, more bytes reclaimed. A count of artifacts
+     gets no colour, because "more artifacts" is not good or bad. */
+  --color-good: #3fb950;
+  --color-bad: #f85149;
+  --color-warn: #d29922;
+
+  /* ---- radii: tight. The old theme used 30px on nearly everything. ----- */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  /* ---- type ------------------------------------------------------------ */
+  --font-sans: "Aptos", "Segoe UI", "Inter", "SF Pro Display", "Helvetica Neue", sans-serif;
+  --font-mono: "Cascadia Mono", "SF Mono", "JetBrains Mono", ui-monospace, monospace;
+}
+
 :root {
-  --apro-noise-texture: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96' viewBox='0 0 96 96'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.8' numOctaves='4' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='gamma' exponent='1.35' amplitude='1.1' offset='0'/%3E%3CfeFuncG type='gamma' exponent='1.35' amplitude='1.1' offset='0'/%3E%3CfeFuncB type='gamma' exponent='1.35' amplitude='1.1' offset='0'/%3E%3CfeFuncA type='table' tableValues='0 0.18 0.34 0.5 0.68 0.82'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='96' height='96' filter='url(%23n)'/%3E%3C/svg%3E");
-  color: #f5f7fb;
-  background: #171c28;
-  font-family: "Aptos", "Segoe UI", "SF Pro Display", "Helvetica Neue", sans-serif;
+  color: var(--color-ink);
+  background: var(--color-canvas);
+  font-family: var(--font-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -26,503 +95,392 @@ body {
   overflow: hidden;
 }
 
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
 input::placeholder {
   opacity: 1;
 }
 
-button,
-input {
-  font: inherit;
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
-.panel-shell {
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.035), transparent 22%, rgba(0, 0, 0, 0.16) 78%, rgba(255, 255, 255, 0.02)),
-    radial-gradient(circle at top left, rgba(128, 154, 255, 0.08), transparent 22%),
-    linear-gradient(180deg, rgba(24, 31, 44, 0.96), rgba(11, 15, 24, 0.99));
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  box-shadow:
-    inset 1px 1px 0 rgba(255, 255, 255, 0.045),
-    inset -1px -1px 0 rgba(0, 0, 0, 0.24),
-    inset 0 14px 24px rgba(255, 255, 255, 0.02),
-    inset 0 -18px 28px rgba(0, 0, 0, 0.22),
-    0 26px 80px rgba(0, 0, 0, 0.28);
-  position: relative;
-}
+@layer components {
+  /* ---- structure ------------------------------------------------------- */
 
-.panel-shell::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border-radius: inherit;
-  opacity: 0.18;
-  background-image:
-    var(--apro-noise-texture),
-    linear-gradient(145deg, rgba(255, 255, 255, 0.06), transparent 34%, rgba(0, 0, 0, 0.18));
-  background-size: 92px 92px, cover;
-  background-repeat: repeat, no-repeat;
-  background-blend-mode: normal, normal;
-}
+  /* The window's ambient glow. Vaulto's depth comes from one soft radial at
+     the top rather than from per-panel gradients. */
+  .app-canvas {
+    background:
+      radial-gradient(120% 62% at 50% -12%, #1c2029 0%, #0d0f13 46%, var(--color-canvas) 100%);
+  }
 
-.panel-topbar {
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.025), transparent 30%, rgba(0, 0, 0, 0.14)),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015)),
-    rgba(11, 15, 24, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  box-shadow:
-    inset 1px 1px 0 rgba(255, 255, 255, 0.045),
-    inset -1px -1px 0 rgba(0, 0, 0, 0.24),
-    0 14px 30px rgba(0, 0, 0, 0.22);
-}
+  .card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-lg);
+  }
 
-.panel-menubar {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0.01)),
-    rgba(10, 14, 22, 0.7);
-  border: 1px solid rgba(255, 255, 255, 0.04);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.025),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.018);
-}
+  .card-interactive {
+    transition: background-color 160ms ease, border-color 160ms ease;
+  }
 
-.panel-soft {
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.028), transparent 26%, rgba(0, 0, 0, 0.12)),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.042), rgba(255, 255, 255, 0.014)),
-    rgba(17, 22, 32, 0.97);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  box-shadow:
-    inset 1px 1px 0 rgba(255, 255, 255, 0.05),
-    inset -2px -2px 0 rgba(0, 0, 0, 0.28),
-    inset 0 12px 16px rgba(255, 255, 255, 0.015),
-    inset 0 -14px 18px rgba(0, 0, 0, 0.18),
-    0 14px 30px rgba(0, 0, 0, 0.18);
-}
+  .card-interactive:hover {
+    background: var(--color-raised);
+    border-color: var(--color-line-strong);
+  }
 
-.panel-soft-danger {
-  background:
-    linear-gradient(180deg, rgba(255, 121, 121, 0.18), rgba(255, 255, 255, 0.02)),
-    rgba(32, 14, 18, 0.92);
-  border: 1px solid rgba(255, 154, 154, 0.14);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    0 16px 40px rgba(0, 0, 0, 0.24);
-}
+  /* A dashed card is the "nothing here yet, add one" affordance. Used in
+     place of an empty grid slot rather than leaving a hole. */
+  .card-dashed {
+    background: transparent;
+    border: 1px dashed var(--color-line-strong);
+    border-radius: var(--radius-lg);
+  }
 
-.panel-raised {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.018)),
-    rgba(22, 29, 42, 0.98);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  box-shadow:
-    inset 1px 1px 0 rgba(255, 255, 255, 0.045),
-    inset -2px -2px 0 rgba(0, 0, 0, 0.24),
-    inset 0 10px 14px rgba(255, 255, 255, 0.012),
-    inset 0 -12px 16px rgba(0, 0, 0, 0.2),
-    0 16px 28px rgba(0, 0, 0, 0.2);
-}
+  .well {
+    background: var(--color-inset);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-md);
+  }
 
-.panel-inset {
-  background:
-    linear-gradient(180deg, rgba(5, 8, 14, 0.76), rgba(15, 21, 32, 0.92)),
-    rgba(8, 11, 17, 0.94);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  box-shadow:
-    inset 0 3px 10px rgba(0, 0, 0, 0.4),
-    inset 2px 2px 0 rgba(0, 0, 0, 0.2),
-    inset -1px -1px 0 rgba(255, 255, 255, 0.02),
-    inset 0 1px 0 rgba(255, 255, 255, 0.03);
-}
+  .rail {
+    /* The sidebar sits a shade darker than the content it frames. */
+    background: var(--color-canvas);
+    border-right: 1px solid var(--color-line);
+  }
 
-.panel-board {
-  position: relative;
-  overflow: hidden;
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.03), transparent 26%, rgba(0, 0, 0, 0.14)),
-    linear-gradient(180deg, rgba(64, 75, 97, 0.2), rgba(21, 27, 39, 0.16)),
-    linear-gradient(180deg, rgba(26, 34, 49, 0.94), rgba(17, 22, 32, 0.98));
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow:
-    inset 1px 1px 0 rgba(255, 255, 255, 0.05),
-    inset -2px -2px 0 rgba(0, 0, 0, 0.26),
-    inset 0 14px 18px rgba(255, 255, 255, 0.01),
-    inset 0 -14px 24px rgba(0, 0, 0, 0.2),
-    0 18px 42px rgba(0, 0, 0, 0.18);
-}
+  .divider {
+    height: 1px;
+    background: var(--color-line);
+  }
 
-.panel-board::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-  background-size: 26px 26px;
-  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.18), transparent 85%);
-}
+  /* ---- type ------------------------------------------------------------ */
 
-.panel-board::after {
-  content: "";
-  position: absolute;
-  left: 4%;
-  right: 4%;
-  bottom: 18px;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
-  transform: rotate(-2deg);
-  opacity: 0.5;
-}
+  /* 10px is the floor. The previous theme went to 9px in places, which is
+     below what most people can read comfortably on a laptop panel. */
+  .label {
+    font-size: 10px;
+    line-height: 1.4;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-ink-faint);
+  }
 
-.panel-stage {
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.028), transparent 24%, rgba(0, 0, 0, 0.14)),
-    linear-gradient(180deg, rgba(22, 28, 40, 0.96), rgba(12, 16, 25, 0.99));
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  box-shadow:
-    inset 1px 1px 0 rgba(255, 255, 255, 0.04),
-    inset -2px -2px 0 rgba(0, 0, 0, 0.28),
-    inset 0 12px 18px rgba(255, 255, 255, 0.01),
-    inset 0 -16px 22px rgba(0, 0, 0, 0.18),
-    0 28px 64px rgba(0, 0, 0, 0.28);
-}
+  .metric {
+    font-size: 30px;
+    line-height: 1.05;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: var(--color-ink);
+    font-variant-numeric: tabular-nums;
+  }
 
-.panel-catalog {
-  position: relative;
-  isolation: isolate;
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.025), transparent 24%, rgba(0, 0, 0, 0.16)),
-    linear-gradient(180deg, rgba(28, 35, 50, 0.92), rgba(14, 19, 30, 0.98));
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow:
-    inset 1px 1px 0 rgba(255, 255, 255, 0.035),
-    inset -2px -2px 0 rgba(0, 0, 0, 0.28),
-    inset 0 10px 16px rgba(255, 255, 255, 0.015),
-    inset 0 -22px 30px rgba(0, 0, 0, 0.2);
-}
+  .metric-lg {
+    font-size: 36px;
+  }
 
-.panel-catalog-surface {
-  position: relative;
-  min-height: 100%;
-}
+  .metric-sm {
+    font-size: 20px;
+    line-height: 1.1;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--color-ink);
+    font-variant-numeric: tabular-nums;
+  }
 
-.panel-catalog-surface::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-  background-size: 34px 34px;
-  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.22), transparent 100%);
-}
+  .mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
 
-.panel-catalog-surface::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  opacity: 0.22;
-  background-image:
-    var(--apro-noise-texture),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 42%, rgba(0, 0, 0, 0.06));
-  background-size: 78px 78px, cover;
-  background-repeat: repeat, no-repeat;
-  background-blend-mode: normal, normal;
-  filter: contrast(136%) brightness(108%);
-}
+  /* ---- controls -------------------------------------------------------- */
 
-.panel-catalog-surface > * {
-  position: relative;
-  z-index: 1;
-}
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border-radius: var(--radius-pill);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+    padding: 8px 14px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+  }
 
-.surface-grid {
-  position: relative;
-  overflow: hidden;
-}
+  .btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
 
-.surface-grid::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-  background-size: 24px 24px;
-  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.15), transparent 88%);
-}
+  .btn-primary {
+    background: var(--color-accent);
+    color: #100a05;
+    border-color: var(--color-accent);
+  }
 
-.panel-card {
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.03), transparent 28%, rgba(0, 0, 0, 0.16)),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.012)),
-    rgba(14, 19, 29, 0.97);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow:
-    inset 1px 1px 0 rgba(255, 255, 255, 0.04),
-    inset -2px -2px 0 rgba(0, 0, 0, 0.28),
-    inset 0 10px 14px rgba(255, 255, 255, 0.012),
-    inset 0 -12px 20px rgba(0, 0, 0, 0.24),
-    0 18px 34px rgba(0, 0, 0, 0.24);
-}
+  .btn-primary:hover:not(:disabled) {
+    background: var(--color-accent-hover);
+    border-color: var(--color-accent-hover);
+  }
 
-.panel-card-stack::before {
-  content: "";
-  position: absolute;
-  inset: auto 14px -10px 14px;
-  height: 20px;
-  border-radius: 0 0 24px 24px;
-  background:
-    linear-gradient(180deg, rgba(93, 117, 173, 0.34), rgba(59, 74, 111, 0.1)),
-    rgba(18, 24, 36, 0.9);
-  filter: blur(0.2px);
-  box-shadow:
-    0 12px 18px rgba(0, 0, 0, 0.22),
-    inset 1px 1px 0 rgba(255, 255, 255, 0.03),
-    inset -1px -1px 0 rgba(0, 0, 0, 0.18);
-}
+  .btn-ghost {
+    background: transparent;
+    color: var(--color-ink-dim);
+    border-color: var(--color-line-strong);
+  }
 
-.panel-card-stack::after {
-  content: "";
-  position: absolute;
-  inset: auto 24px -18px 24px;
-  height: 18px;
-  border-radius: 0 0 22px 22px;
-  background:
-    linear-gradient(180deg, rgba(121, 238, 193, 0.24), rgba(102, 156, 243, 0.08)),
-    rgba(17, 22, 33, 0.92);
-  box-shadow:
-    0 12px 20px rgba(0, 0, 0, 0.18),
-    inset 1px 1px 0 rgba(255, 255, 255, 0.025),
-    inset -1px -1px 0 rgba(0, 0, 0, 0.18);
-}
+  .btn-ghost:hover:not(:disabled) {
+    background: var(--color-raised);
+    color: var(--color-ink);
+  }
 
-.panel-card > .relative::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border-radius: inherit;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.02);
-}
+  .btn-quiet {
+    background: var(--color-raised);
+    color: var(--color-ink);
+    border-color: var(--color-line);
+  }
 
-.panel-chip {
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.03), transparent 28%, rgba(0, 0, 0, 0.14)),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
-    rgba(18, 24, 36, 0.98);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow:
-    inset 1px 1px 0 rgba(255, 255, 255, 0.04),
-    inset -2px -2px 0 rgba(0, 0, 0, 0.22),
-    inset 0 6px 8px rgba(255, 255, 255, 0.01),
-    inset 0 -6px 10px rgba(0, 0, 0, 0.16),
-    0 10px 18px rgba(0, 0, 0, 0.14);
-}
+  .btn-quiet:hover:not(:disabled) {
+    border-color: var(--color-line-strong);
+  }
 
-.panel-icon {
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.03), transparent 28%, rgba(0, 0, 0, 0.18)),
-    linear-gradient(180deg, rgba(28, 36, 52, 0.86), rgba(16, 21, 32, 0.98)),
-    rgba(10, 14, 22, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow:
-    inset 1px 1px 0 rgba(255, 255, 255, 0.045),
-    inset -2px -2px 0 rgba(0, 0, 0, 0.24),
-    inset 0 6px 10px rgba(255, 255, 255, 0.012),
-    inset 0 -10px 16px rgba(0, 0, 0, 0.2),
-    0 10px 18px rgba(0, 0, 0, 0.18);
-}
+  .btn-danger {
+    background: transparent;
+    color: var(--color-bad);
+    border-color: color-mix(in srgb, var(--color-bad) 38%, transparent);
+  }
 
-.panel-tray {
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.03), transparent 28%, rgba(0, 0, 0, 0.14)),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.014)),
-    rgba(23, 30, 44, 0.97);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow:
-    inset 1px 1px 0 rgba(255, 255, 255, 0.035),
-    inset -2px -2px 0 rgba(0, 0, 0, 0.24),
-    inset 0 8px 10px rgba(255, 255, 255, 0.01),
-    inset 0 -10px 18px rgba(0, 0, 0, 0.2),
-    0 12px 24px rgba(0, 0, 0, 0.14);
-}
+  .btn-danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-bad) 14%, transparent);
+  }
 
-.panel-search {
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.035), transparent 28%, rgba(0, 0, 0, 0.14)),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
-    rgba(28, 35, 50, 0.98);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow:
-    inset 1px 1px 0 rgba(255, 255, 255, 0.03),
-    inset -2px -2px 0 rgba(0, 0, 0, 0.24),
-    inset 0 8px 10px rgba(255, 255, 255, 0.01),
-    inset 0 -12px 18px rgba(0, 0, 0, 0.22),
-    0 14px 24px rgba(0, 0, 0, 0.16);
-}
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 30px;
+    width: 30px;
+    border-radius: var(--radius-sm);
+    color: var(--color-ink-faint);
+    transition: background-color 150ms ease, color 150ms ease;
+  }
 
-.nav-idle {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.012)),
-    rgba(17, 22, 32, 0.84);
-  border: 1px solid rgba(255, 255, 255, 0.04);
-  box-shadow:
-    inset 1px 1px 0 rgba(255, 255, 255, 0.03),
-    inset -2px -2px 0 rgba(0, 0, 0, 0.18),
-    inset 0 -6px 12px rgba(0, 0, 0, 0.14);
-}
+  .icon-btn:hover {
+    background: var(--color-raised);
+    color: var(--color-ink);
+  }
 
-.nav-active {
-  background:
-    linear-gradient(180deg, rgba(143, 177, 255, 0.13), rgba(255, 255, 255, 0.02)),
-    rgba(24, 31, 46, 0.99);
-  border: 1px solid rgba(154, 188, 255, 0.22);
-  box-shadow:
-    inset 1px 1px 0 rgba(255, 255, 255, 0.055),
-    inset -2px -2px 0 rgba(0, 0, 0, 0.18),
-    inset 0 -8px 14px rgba(0, 0, 0, 0.16),
-    0 10px 18px rgba(0, 0, 0, 0.16);
-}
+  .icon-btn-danger:hover {
+    background: color-mix(in srgb, var(--color-bad) 16%, transparent);
+    color: var(--color-bad);
+  }
 
-.pill-installed {
-  color: #efcfaa;
-}
+  .field {
+    background: var(--color-inset);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-md);
+    color: var(--color-ink);
+    transition: border-color 150ms ease;
+  }
 
-.pill-available {
-  color: #b6f1d5;
-}
+  .field:focus-within,
+  .field:focus {
+    border-color: var(--color-line-strong);
+  }
 
-.pill-update {
-  color: #cbbcff;
-}
+  /* ---- navigation ------------------------------------------------------ */
 
-.control-primary {
-  background: linear-gradient(180deg, #bbd2ff, #9fc0ff);
-  border: 1px solid rgba(220, 233, 255, 0.3);
-  box-shadow:
-    0 8px 14px rgba(106, 143, 255, 0.22),
-    inset 0 1px 0 rgba(255, 255, 255, 0.42),
-    inset 0 -10px 14px rgba(90, 121, 208, 0.22),
-    inset 1px 1px 0 rgba(255, 255, 255, 0.22),
-    inset -2px -2px 0 rgba(92, 119, 198, 0.22);
-}
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    border-radius: var(--radius-md);
+    padding: 7px 10px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-ink-dim);
+    text-align: left;
+    transition: background-color 150ms ease, color 150ms ease;
+  }
 
-.control-secondary {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)),
-    rgba(20, 27, 41, 0.48);
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  box-shadow:
-    inset 1px 1px 0 rgba(255, 255, 255, 0.045),
-    inset -2px -2px 0 rgba(0, 0, 0, 0.22),
-    inset 0 -8px 12px rgba(0, 0, 0, 0.18),
-    0 8px 14px rgba(0, 0, 0, 0.14);
-}
+  .nav-item:hover {
+    background: var(--color-raised);
+    color: var(--color-ink);
+  }
 
-.control-secondary:hover {
-  box-shadow:
-    inset 1px 1px 0 rgba(255, 255, 255, 0.055),
-    inset -2px -2px 0 rgba(0, 0, 0, 0.24),
-    inset 0 -8px 12px rgba(0, 0, 0, 0.2),
-    0 10px 18px rgba(0, 0, 0, 0.16);
-}
+  .nav-item-active {
+    background: var(--color-raised);
+    color: var(--color-ink);
+  }
 
-.control-glass {
-  position: relative;
-  overflow: hidden;
-  backdrop-filter: blur(18px) saturate(155%);
-  -webkit-backdrop-filter: blur(18px) saturate(155%);
-}
+  .nav-item-active .nav-glyph {
+    color: var(--color-accent);
+  }
 
-.control-clear {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.03) 44%, rgba(255, 255, 255, 0.01)),
-    linear-gradient(135deg, rgba(178, 205, 255, 0.14), rgba(255, 255, 255, 0.02) 42%, rgba(78, 102, 150, 0.08)),
-    rgba(17, 24, 36, 0.16);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.18),
-    inset 0 -10px 14px rgba(0, 0, 0, 0.12),
-    inset 1px 1px 0 rgba(255, 255, 255, 0.06),
-    0 10px 18px rgba(0, 0, 0, 0.1);
-}
+  .nav-glyph {
+    color: var(--color-ink-faint);
+    flex-shrink: 0;
+  }
 
-.control-clear:hover {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.04) 44%, rgba(255, 255, 255, 0.015)),
-    linear-gradient(135deg, rgba(190, 215, 255, 0.18), rgba(255, 255, 255, 0.03) 42%, rgba(82, 108, 160, 0.1)),
-    rgba(17, 24, 36, 0.2);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.22),
-    inset 0 -10px 14px rgba(0, 0, 0, 0.14),
-    inset 1px 1px 0 rgba(255, 255, 255, 0.08),
-    0 12px 20px rgba(0, 0, 0, 0.12);
-}
+  /* ---- status pills ----------------------------------------------------
+     `pill-stale` and `pill-failed` are the only coloured pills. Everything
+     else is neutral, because it does not mean anything is wrong. */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--color-line);
+    padding: 3px 9px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-ink-dim);
+    white-space: nowrap;
+  }
 
-.control-glass::before {
-  content: "";
-  position: absolute;
-  inset: 1px;
-  border-radius: inherit;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.06) 32%, transparent 55%),
-    radial-gradient(circle at 18% 22%, rgba(255, 255, 255, 0.16), transparent 34%),
-    radial-gradient(circle at 82% 78%, rgba(255, 255, 255, 0.08), transparent 28%);
-  opacity: 0.92;
-  pointer-events: none;
-}
+  .pill-fresh {
+    color: var(--color-good);
+    border-color: color-mix(in srgb, var(--color-good) 34%, transparent);
+    background: color-mix(in srgb, var(--color-good) 10%, transparent);
+  }
 
-.control-glass::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.04),
-    inset -10px -12px 16px rgba(36, 46, 68, 0.14);
-  pointer-events: none;
-}
+  .pill-stale {
+    color: var(--color-warn);
+    border-color: color-mix(in srgb, var(--color-warn) 34%, transparent);
+    background: color-mix(in srgb, var(--color-warn) 10%, transparent);
+  }
 
-.progress-fill {
-  background: linear-gradient(90deg, #7ab0ff, #9cc4ff);
-  box-shadow:
-    0 0 18px rgba(131, 176, 255, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.25);
-}
+  .pill-failed {
+    color: var(--color-bad);
+    border-color: color-mix(in srgb, var(--color-bad) 34%, transparent);
+    background: color-mix(in srgb, var(--color-bad) 10%, transparent);
+  }
 
-.custom-scrollbar {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(143, 177, 255, 0.42) rgba(255, 255, 255, 0.05);
-}
+  .pill-accent {
+    color: var(--color-accent);
+    border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+    background: var(--color-accent-soft);
+  }
 
-.custom-scrollbar::-webkit-scrollbar {
-  width: 10px;
-}
+  .pill-dot {
+    height: 5px;
+    width: 5px;
+    border-radius: var(--radius-pill);
+    background: currentColor;
+    flex-shrink: 0;
+  }
 
-.custom-scrollbar::-webkit-scrollbar-track {
-  margin-block: 10px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
-}
+  /* ---- deltas ----------------------------------------------------------
+     Direction is only shown where it is genuinely good or bad. Callers that
+     cannot justify a colour use `.delta-flat`. */
+  .delta {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    border-radius: var(--radius-pill);
+    padding: 2px 7px;
+    font-size: 10px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
 
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  border: 2px solid transparent;
-  border-radius: 999px;
-  background: linear-gradient(180deg, rgba(182, 202, 255, 0.78), rgba(120, 150, 235, 0.62));
-  background-clip: padding-box;
-}
+  .delta-good {
+    color: var(--color-good);
+    background: color-mix(in srgb, var(--color-good) 12%, transparent);
+  }
 
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(198, 214, 255, 0.9), rgba(137, 170, 246, 0.78));
-  background-clip: padding-box;
+  .delta-bad {
+    color: var(--color-bad);
+    background: color-mix(in srgb, var(--color-bad) 12%, transparent);
+  }
+
+  .delta-flat {
+    color: var(--color-ink-faint);
+    background: var(--color-raised);
+  }
+
+  /* ---- segmented control ----------------------------------------------- */
+  .segmented {
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: var(--radius-sm);
+    background: var(--color-inset);
+    border: 1px solid var(--color-line);
+  }
+
+  .segmented-item {
+    border-radius: var(--radius-xs);
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--color-ink-faint);
+    transition: background-color 150ms ease, color 150ms ease;
+  }
+
+  .segmented-item:hover {
+    color: var(--color-ink);
+  }
+
+  .segmented-item-active {
+    background: var(--color-raised);
+    color: var(--color-ink);
+  }
+
+  /* ---- progress -------------------------------------------------------- */
+  .progress-track {
+    background: var(--color-inset);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-pill);
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    background: var(--color-accent);
+    border-radius: var(--radius-pill);
+    transition: width 300ms ease;
+  }
+
+  .scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line-strong) transparent;
+  }
+
+  .scroll::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scroll::-webkit-scrollbar-thumb {
+    border-radius: var(--radius-pill);
+    background: var(--color-line-strong);
+  }
+
+  .scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--color-ink-faint);
+  }
+
+  /* React Flow hardcodes `color: #999` for its attribution link and exposes no
+     `--xy-*` variable for it, so the only way to keep it inside the token layer is to
+     override the rule here. */
+  .react-flow__attribution a {
+    color: var(--color-ink-faint);
+  }
 }

@@ -51,14 +51,16 @@ function PortRow({
       style={{ height: ROW_H }}
       title={`${label} — ${typeId}\n${describeType(typeId).description}`}
     >
+      {/* A port that has a wire is an active state, so it takes the accent. A port with
+          no wire is neutral, not wrong. */}
       <span
         className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-          connected ? "bg-[rgba(128,154,255,0.95)]" : "bg-white/22"
+          connected ? "bg-accent" : "bg-ink-faint"
         }`}
       />
       <span
         className={`truncate text-[11px] leading-none ${
-          connected ? "text-white/78" : "text-white/48"
+          connected ? "text-ink" : "text-ink-dim"
         }`}
       >
         {label}
@@ -76,18 +78,13 @@ export function AppNode({ data, selected }: NodeProps<AppNodeType>) {
 
   return (
     <div
-      className={`panel-raised w-[272px] select-none rounded-2xl transition ${
-        selected ? "ring-1 ring-[rgba(128,154,255,0.55)]" : ""
+      className={`card w-[272px] select-none rounded-lg transition ${
+        selected ? "ring-1 ring-accent" : isStale ? "ring-1 ring-warn" : ""
       }`}
-      style={
-        isStale
-          ? { boxShadow: "0 0 0 1px rgba(255,183,94,0.42), 0 16px 28px rgba(0,0,0,0.28)" }
-          : undefined
-      }
     >
       {/* header */}
       <div
-        className="flex items-center gap-2.5 rounded-t-2xl border-b border-white/6 px-3"
+        className="flex items-center gap-2.5 border-b border-line px-3"
         style={{ height: HEADER_H }}
       >
         {node.icon ? (
@@ -99,16 +96,14 @@ export function AppNode({ data, selected }: NodeProps<AppNodeType>) {
           />
         ) : null}
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[12.5px] font-medium leading-tight text-white/92">
+          <div className="truncate text-[12.5px] font-medium leading-tight text-ink">
             {node.name}
           </div>
-          <div className="truncate text-[10px] leading-tight text-white/40">{node.appSlug}</div>
+          <div className="truncate text-[10px] leading-tight text-ink-faint">{node.appSlug}</div>
         </div>
+        {/* Stale wires are the one genuinely worse state a node can be in: fewer is good. */}
         {isStale ? (
-          <span
-            className="shrink-0 rounded-full bg-[rgba(255,183,94,0.16)] px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-[rgba(255,201,133,0.95)]"
-            title={`${staleWires} connection(s) out of date`}
-          >
+          <span className="pill pill-stale shrink-0" title={`${staleWires} connection(s) out of date`}>
             STALE
           </span>
         ) : null}
@@ -117,14 +112,11 @@ export function AppNode({ data, selected }: NodeProps<AppNodeType>) {
       {/* ports */}
       <div className="grid grid-cols-2 gap-x-3 px-3 pb-3" style={{ paddingTop: PAD_TOP }}>
         <div>
-          <div
-            className="flex items-center text-[9px] uppercase tracking-[0.14em] text-white/28"
-            style={{ height: LABEL_H }}
-          >
+          <div className="label flex items-center" style={{ height: LABEL_H }}>
             in
           </div>
           {inputs.length === 0 ? (
-            <div className="text-[10px] italic text-white/24">none</div>
+            <div className="text-[10px] italic text-ink-faint">none</div>
           ) : (
             inputs.map((port) => (
               <PortRow
@@ -137,14 +129,11 @@ export function AppNode({ data, selected }: NodeProps<AppNodeType>) {
           )}
         </div>
         <div className="text-right">
-          <div
-            className="flex items-center justify-end text-[9px] uppercase tracking-[0.14em] text-white/28"
-            style={{ height: LABEL_H }}
-          >
+          <div className="label flex items-center justify-end" style={{ height: LABEL_H }}>
             out
           </div>
           {outputs.length === 0 ? (
-            <div className="text-[10px] italic text-white/24">none</div>
+            <div className="text-[10px] italic text-ink-faint">none</div>
           ) : (
             outputs.map((port) => (
               <div key={port.typeId} className="flex justify-end">
@@ -160,20 +149,23 @@ export function AppNode({ data, selected }: NodeProps<AppNodeType>) {
       </div>
 
       {/* footer */}
-      <div className="flex items-center gap-1.5 border-t border-white/5 px-3 py-1.5 text-[9.5px] text-white/34">
+      <div className="flex items-center gap-1.5 border-t border-line px-3 py-1.5 text-[10px] text-ink-faint">
+        {/* Installed or not is a state, not a verdict, so the dot carries no status
+            colour. A count of connections is likewise neutral. */}
         <span
           className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-            node.installed ? "bg-[rgba(122,226,168,0.95)]" : "bg-white/25"
+            node.installed ? "bg-ink-dim" : "bg-ink-faint"
           }`}
         />
         <span>{node.installed ? "installed" : "not installed"}</span>
-        <span className="text-white/20">·</span>
+        <span className="text-ink-faint">·</span>
         <span>
           {wiredCount} connection{wiredCount === 1 ? "" : "s"}
         </span>
+        {/* A slug that cannot namespace a type is a real defect: it blocks publishing. */}
         {!namespaceOk ? (
           <span
-            className="ml-auto text-[rgba(255,160,160,0.9)]"
+            className="ml-auto text-bad"
             title={`"${node.appSlug}" is not kebab-case, so it cannot namespace an artifact type. Normalise the product slug before this app publishes anything.`}
           >
             invalid slug
@@ -189,7 +181,7 @@ export function AppNode({ data, selected }: NodeProps<AppNodeType>) {
           type="target"
           position={Position.Left}
           style={{ top: rowTop(index) }}
-          className={port.connected ? "!bg-[rgba(128,154,255,0.95)]" : undefined}
+          className={port.connected ? "!border-accent !bg-accent" : "!border-line-strong !bg-ink-faint"}
         />
       ))}
       {outputs.map((port, index) => (
@@ -199,7 +191,7 @@ export function AppNode({ data, selected }: NodeProps<AppNodeType>) {
           type="source"
           position={Position.Right}
           style={{ top: rowTop(index) }}
-          className={port.connected ? "!bg-[rgba(128,154,255,0.95)]" : undefined}
+          className={port.connected ? "!border-accent !bg-accent" : "!border-line-strong !bg-ink-faint"}
         />
       ))}
     </div>

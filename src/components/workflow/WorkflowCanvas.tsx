@@ -41,29 +41,51 @@ import { AppNode, parseHandleId, type AppNodeType } from "./AppNode";
 
 const NODE_TYPES = { app: AppNode };
 
-const STALE_STROKE = "rgba(255,183,94,0.95)";
-const LIVE_STROKE = "rgba(128,154,255,0.85)";
-const DRAFT_STROKE = "rgba(255,255,255,0.34)";
+/**
+ * Edge weight marks the exception, not the norm.
+ *
+ * A stale wire is genuinely worse than a fresh one — the consumer is behind the producer
+ * — so it gets the warning colour. Everything else is quiet: a satisfied wire is the
+ * normal case and marking every one of them green would leave the canvas mostly green,
+ * at which point the colour has stopped carrying information and the eye has to hunt for
+ * the one that differs. A locally drawn draft is quieter still, because it has not been
+ * written yet and that is not a fault.
+ */
+const STALE_STROKE = "var(--color-warn)";
+const LIVE_STROKE = "var(--color-ink-dim)";
+const DRAFT_STROKE = "var(--color-ink-faint)";
+const CONNECT_STROKE = "var(--color-accent)";
 
 /**
- * React Flow's chrome defaults to a LIGHT theme: the control buttons paint `#fefefe`
- * and their icons are `fill: currentColor`, which is near-white in this app. The result
- * is white icons on white buttons, i.e. apparently missing icons.
+ * React Flow's chrome defaults to a LIGHT theme: the control buttons paint a near-white
+ * surface and their icons are `fill: currentColor`, which is near-white in this app. The
+ * result is white icons on white buttons, i.e. apparently missing icons.
  *
  * Theming the `Controls` container is not enough — the per-button custom properties are
- * what the icon colour comes from, so they are set here.
+ * what the icon colour comes from, so they are set here. React Flow also defaults the
+ * canvas to a transparent/white background, so `--xy-background-color` is set explicitly
+ * from the token layer.
  */
 const CANVAS_THEME = {
-  "--xy-controls-button-background-color": "rgba(20,26,38,0.96)",
-  "--xy-controls-button-background-color-hover": "rgba(40,52,72,0.98)",
-  "--xy-controls-button-color": "rgba(245,247,251,0.80)",
-  "--xy-controls-button-color-hover": "#ffffff",
-  "--xy-controls-button-border-color": "rgba(255,255,255,0.08)",
-  "--xy-minimap-background-color": "rgba(12,16,24,0.92)",
-  "--xy-minimap-mask-background-color": "rgba(8,11,17,0.72)",
-  "--xy-attribution-background-color": "rgba(12,16,24,0.7)",
-  "--xy-edge-label-background-color": "rgba(12,16,24,0.92)",
-  "--xy-edge-label-color": "rgba(255,255,255,0.6)",
+  "--xy-background-color": "var(--color-canvas)",
+  "--xy-controls-button-background-color": "var(--color-surface)",
+  "--xy-controls-button-background-color-hover": "var(--color-raised)",
+  "--xy-controls-button-color": "var(--color-ink-dim)",
+  "--xy-controls-button-color-hover": "var(--color-ink)",
+  "--xy-controls-button-border-color": "var(--color-line)",
+  "--xy-controls-box-shadow": "none",
+  "--xy-minimap-background-color": "var(--color-surface)",
+  "--xy-minimap-mask-background-color": "var(--color-canvas)",
+  "--xy-minimap-mask-stroke-color": "var(--color-line)",
+  "--xy-minimap-node-background-color": "var(--color-ink-faint)",
+  "--xy-minimap-node-stroke-color": "var(--color-line-strong)",
+  "--xy-attribution-background-color": "var(--color-surface)",
+  "--xy-edge-label-background-color": "var(--color-surface)",
+  "--xy-edge-label-color": "var(--color-ink-dim)",
+  "--xy-handle-background-color": "var(--color-ink-faint)",
+  "--xy-handle-border-color": "var(--color-line-strong)",
+  "--xy-selection-background-color": "var(--color-accent-soft)",
+  "--xy-selection-border": "1px dotted var(--color-accent)",
 } as CSSProperties;
 
 function toRfNode(node: WorkflowNode, graph: WorkflowGraph): AppNodeType {
@@ -96,10 +118,10 @@ function toRfEdge(wire: WorkflowWire): Edge {
     labelShowBg: true,
     labelBgPadding: [5, 2],
     labelBgBorderRadius: 6,
-    labelBgStyle: { fill: "rgba(12,16,24,0.92)", stroke: "rgba(255,255,255,0.08)" },
+    labelBgStyle: { fill: "var(--color-surface)", stroke: "var(--color-line)" },
     labelStyle: {
-      fill: stale ? STALE_STROKE : "rgba(255,255,255,0.55)",
-      fontSize: 9,
+      fill: stale ? STALE_STROKE : "var(--color-ink-dim)",
+      fontSize: 10,
       letterSpacing: 0.6,
     },
     style: {
@@ -230,7 +252,7 @@ function CanvasInner({ graph, apps, onGraphChange, onReject }: Props) {
         minZoom={0.25}
         maxZoom={1.6}
         proOptions={{ hideAttribution: false }}
-        connectionLineStyle={{ stroke: "rgba(128,154,255,0.9)", strokeWidth: 2 }}
+        connectionLineStyle={{ stroke: CONNECT_STROKE, strokeWidth: 2 }}
         defaultEdgeOptions={{ style: { stroke: LIVE_STROKE, strokeWidth: 2 } }}
         deleteKeyCode={["Backspace", "Delete"]}
         style={CANVAS_THEME}
@@ -239,18 +261,18 @@ function CanvasInner({ graph, apps, onGraphChange, onReject }: Props) {
           variant={BackgroundVariant.Dots}
           gap={22}
           size={1}
-          color="rgba(255,255,255,0.09)"
+          color="var(--color-line-strong)"
         />
         <Controls
           showInteractive={false}
-          className="!rounded-xl !border !border-white/8 !bg-[rgba(17,22,32,0.94)] !shadow-lg"
+          className="!rounded-md !border !border-line-strong !bg-surface !shadow-none"
         />
         <MiniMap
           pannable
           zoomable
-          className="!rounded-xl !border !border-white/8 !bg-[rgba(12,16,24,0.9)]"
-          maskColor="rgba(8,11,17,0.72)"
-          nodeColor="rgba(128,154,255,0.55)"
+          className="!rounded-md !border !border-line-strong !bg-surface"
+          maskColor="color-mix(in srgb, var(--color-canvas) 72%, transparent)"
+          nodeColor="var(--color-ink-faint)"
         />
       </ReactFlow>
     </div>

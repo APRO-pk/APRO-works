@@ -4,7 +4,16 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri + React + Typescript</title>
+    <title>APRO Works</title>
+    <!--
+      The window paints before the bundled stylesheet is parsed, so the first frame
+      needs a colour or it flashes white. This duplicates --color-canvas in
+      src/index.css because it must exist before that file loads; index.css stays the
+      single source of truth for everything after first paint.
+    -->
+    <style>
+      html { background: #08090b; }
+    </style>
   </head>
 
   <body>
