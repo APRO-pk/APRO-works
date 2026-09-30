@@ -10,15 +10,16 @@ import {
   getCurrentWindow,
 } from "@tauri-apps/api/window";
 import { supabase } from "./lib/supabase";
+import { WorkflowsPanel } from "./sections/WorkflowsPanel";
 import burnBackground from "./assets/burnAndGeometry.png";
 import hexadofBackground from "./assets/hexadof.png";
 import logo from "../src-tauri/icons/icon.png";
 import propulsorBackground from "./assets/propulsor.png";
-import geometryIcon from "../../Icons/PNG/GeometryModeler.png";
-import hexadofIcon from "../../Icons/PNG/HexadofForLight.png";
-import propulsorIcon from "../../Icons/PNG/PropulsorForLight.png";
+import geometryIcon from "./assets/icons/GeometryModeler.png";
+import hexadofIcon from "./assets/icons/HexadofForLight.png";
+import propulsorIcon from "./assets/icons/PropulsorForLight.png";
 
-type SectionId = "installed-apps" | "all-apps" | "downloads" | "settings";
+type SectionId = "installed-apps" | "all-apps" | "workflows" | "downloads" | "settings";
 type DownloadStage =
   | "idle"
   | "checking"
@@ -42,8 +43,12 @@ type ProductDefinition = {
   description: string;
   archiveUrl: string;
   executablePath: string;
-  backgroundImage: string;
-  iconImage: string;
+  /**
+   * Optional artwork. Without it the card falls back to a gradient and a monogram,
+   * which is honest: a placeholder image would misrepresent the product.
+   */
+  backgroundImage?: string;
+  iconImage?: string;
   eyebrow: string;
   backgroundPosition?: string;
   overlayClassName?: string;
@@ -94,6 +99,22 @@ const RESTORED_WINDOW_HEIGHT = 900;
 
 const products: ProductDefinition[] = [
   {
+    slug: "apro-cad",
+    name: "APRO CAD",
+    titleLines: ["APRO CAD"],
+    description:
+      "Text-first parametric CAD for rocket hardware. Describe geometry in RON and evaluate it to 3D meshes.",
+    // A GitHub Release asset. `/releases/latest/download/<name>` is stable because the
+    // asset name is version-free, so the ETag changing is what signals an update.
+    archiveUrl:
+      "https://github.com/APRO-pk/aproCAD/releases/latest/download/apro-cad-win64.zip",
+    executablePath: "apro-cad.exe",
+    eyebrow: "Parametric CAD",
+    backgroundPosition: "center center",
+    // No backgroundImage / iconImage: the repo ships only the stock Tauri placeholder
+    // icons (one is a blank white square). Real artwork is a follow-up.
+  },
+  {
     slug: "burn-geometry-modeler",
     name: "Burn & Geometry Modeler",
     titleLines: ["Burn & Geometry", "Modeler"],
@@ -130,8 +151,9 @@ const products: ProductDefinition[] = [
     slug: "hexadof",
     name: "HexaDOF",
     description: "Flight dynamics, telemetry, and six-degree-of-freedom analysis in a live mission workspace.",
-    archiveUrl: "https://www.mediafire.com/file/uepghrhq5hos7y3/HexaDOF-win64.zip/file",
-    executablePath: "HexaDOF\\HexaDOF.exe",
+    archiveUrl:
+      "https://github.com/APRO-pk/hexadof2/releases/latest/download/hexadof-win64.zip",
+    executablePath: "hexadof-desktop.exe",
     backgroundImage: hexadofBackground,
     iconImage: hexadofIcon,
     eyebrow: "Flight Dynamics",
@@ -161,6 +183,19 @@ const navItems: NavItem[] = [
       <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3Z" />
         <path d="M4 7.5 12 12l8-4.5M12 12v9" />
+      </svg>
+    ),
+  },
+  {
+    id: "workflows",
+    label: "Workflows",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <rect x="3" y="3.5" width="7" height="5" rx="1.6" />
+        <rect x="14" y="15.5" width="7" height="5" rx="1.6" />
+        <path d="M10 6h3.5a3 3 0 0 1 3 3v6.5" />
+        <circle cx="10" cy="6" r="1.1" />
+        <circle cx="16.5" cy="15.5" r="1.1" />
       </svg>
     ),
   },
@@ -195,6 +230,11 @@ const sectionCopy: Record<SectionId, { eyebrow: string; title: string; subtitle:
   "installed-apps": {
     eyebrow: "Local",
     title: "Installed Apps",
+    subtitle: "",
+  },
+  workflows: {
+    eyebrow: "Orchestration",
+    title: "Workflows",
     subtitle: "",
   },
   downloads: {
@@ -520,11 +560,14 @@ function SectionHeader({
   title,
   subtitle,
   stats,
+  actions,
 }: {
   eyebrow: string;
   title: string;
   subtitle: string;
   stats?: Array<{ label: string; value: string | number }>;
+  /** Section-specific controls, shown above the stat pills. */
+  actions?: ReactNode;
 }) {
   return (
     <section className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
@@ -535,11 +578,16 @@ function SectionHeader({
         </h2>
         {subtitle ? <p className="mt-3 max-w-[34rem] text-[0.95rem] leading-7 text-white/52">{subtitle}</p> : null}
       </div>
-      {stats && stats.length > 0 ? (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:min-w-[15rem]">
-          {stats.map((stat) => (
-            <StatPill key={stat.label} label={stat.label} value={stat.value} />
-          ))}
+      {actions || (stats && stats.length > 0) ? (
+        <div className="flex flex-col items-start gap-4 xl:items-end">
+          {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
+          {stats && stats.length > 0 ? (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:min-w-[15rem]">
+              {stats.map((stat) => (
+                <StatPill key={stat.label} label={stat.label} value={stat.value} />
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </section>
@@ -563,13 +611,17 @@ function ProductCard({
 }) {
   return (
     <article className="panel-card panel-card-stack group relative overflow-hidden rounded-[30px]">
-      <div
-        className="absolute inset-0 scale-[1.02] bg-cover bg-center blur-[7px] transition duration-700 group-hover:scale-[1.08] group-hover:blur-[4px]"
-        style={{
-          backgroundImage: `url(${product.backgroundImage})`,
-          backgroundPosition: product.backgroundPosition ?? "center center",
-        }}
-      />
+      {product.backgroundImage ? (
+        <div
+          className="absolute inset-0 scale-[1.02] bg-cover bg-center blur-[7px] transition duration-700 group-hover:scale-[1.08] group-hover:blur-[4px]"
+          style={{
+            backgroundImage: `url(${product.backgroundImage})`,
+            backgroundPosition: product.backgroundPosition ?? "center center",
+          }}
+        />
+      ) : (
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_28%_18%,rgba(128,154,255,0.22),transparent_58%),linear-gradient(150deg,rgba(38,50,78,0.96),rgba(14,19,30,0.99))]" />
+      )}
       <div className={`absolute inset-0 ${product.overlayClassName ?? "bg-[linear-gradient(180deg,rgba(8,11,19,0.22),rgba(8,11,19,0.58)_38%,rgba(7,10,16,0.95)_100%)]"}`} />
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(125,154,242,0.18),transparent_22%),radial-gradient(circle_at_bottom_right,rgba(117,149,245,0.12),transparent_24%)] opacity-90" />
       <div className="panel-grain absolute inset-0 opacity-55" />
@@ -594,7 +646,13 @@ function ProductCard({
               product.iconClassName ?? ""
             }`}
           >
-            <img src={product.iconImage} alt="" className="max-h-full w-auto object-contain" />
+            {product.iconImage ? (
+              <img src={product.iconImage} alt="" className="max-h-full w-auto object-contain" />
+            ) : (
+              <span className="flex h-full w-full items-center justify-center rounded-[20px] border border-white/10 bg-white/[0.06] text-[1.35rem] font-semibold tracking-[0.08em] text-white/72">
+                {initialsFromName(product.name)}
+              </span>
+            )}
           </div>
           <h3
             className={`max-w-[13ch] text-[1.58rem] font-semibold leading-[0.98] tracking-tight text-white drop-shadow-[0_10px_20px_rgba(0,0,0,0.45)] ${
@@ -828,6 +886,10 @@ function App() {
   const [errorMessage, setErrorMessage] = useState("");
   const [downloadHistory, setDownloadHistory] = useState<DownloadHistoryItem[]>([]);
   const [launchOverlayProduct, setLaunchOverlayProduct] = useState<string | null>(null);
+  // The Workflows tab's buttons live in the section header, so their state lives here.
+  const [workflowSync, setWorkflowSync] = useState(0);
+  const [workflowReset, setWorkflowReset] = useState(0);
+  const [workflowConsole, setWorkflowConsole] = useState(false);
   const [snackbar, setSnackbar] = useState<SnackbarState>({
     visible: false,
     title: "",
@@ -1247,6 +1309,7 @@ function App() {
       { label: "Installed", value: installedProductsCount },
     ],
     "installed-apps": [{ label: "Installed", value: installedProductsCount }],
+    workflows: [{ label: "Apps", value: availableProductsCount }],
     downloads: [
       { label: "State", value: stageLabels[downloadStage] },
       { label: "Queue", value: busy ? "Busy" : "Idle" },
@@ -1357,6 +1420,39 @@ function App() {
                 title={activeCopy.title}
                 subtitle={activeCopy.subtitle}
                 stats={sectionStats[activeSection]}
+                actions={
+                  activeSection === "workflows" ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setWorkflowSync((token) => token + 1)}
+                        title="Re-read the orchestration store"
+                        className="panel-soft rounded-xl px-3.5 py-2 text-[12px] text-white/70 transition hover:text-white"
+                      >
+                        Sync
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setWorkflowConsole(true)}
+                        className="panel-raised flex items-center gap-2 rounded-xl px-3.5 py-2 text-[12px] text-white/86 transition hover:text-white"
+                      >
+                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+                          <rect x="3" y="4" width="18" height="16" rx="2.5" />
+                          <path d="M7 9l3 3-3 3M12.5 15H17" />
+                        </svg>
+                        Console
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setWorkflowReset((token) => token + 1)}
+                        title="Reset the canvas to the default template"
+                        className="panel-soft rounded-xl px-3.5 py-2 text-[12px] text-white/70 transition hover:text-white"
+                      >
+                        Reset
+                      </button>
+                    </>
+                  ) : undefined
+                }
               />
             </div>
 
@@ -1422,6 +1518,22 @@ function App() {
                       <EmptyState title="No products installed" detail="Install a workspace from All Apps and it will appear here." />
                     )}
                   </>
+                )}
+
+                {activeSection === "workflows" && (
+                  <WorkflowsPanel
+                    apps={products.map((product) => ({
+                      slug: product.slug,
+                      name: product.name,
+                      installed: Boolean(productStatuses[product.slug]?.installed),
+                      icon: product.iconImage,
+                    }))}
+                    syncToken={workflowSync}
+                    resetToken={workflowReset}
+                    consoleOpen={workflowConsole}
+                    onConsoleClose={() => setWorkflowConsole(false)}
+                    className="h-[calc(100vh-345px)] min-h-[430px]"
+                  />
                 )}
 
                 {activeSection === "downloads" && (

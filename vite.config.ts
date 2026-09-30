@@ -27,7 +27,12 @@ export default defineConfig(async () => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      //
+      // `**/target/**` matters because the Cargo workspace lives at the repo root, so
+      // Cargo's build tree sits beside the frontend rather than inside `src-tauri/`.
+      // Watching it crashes the dev server with EBUSY the moment Cargo locks a
+      // freshly-linked executable mid-compile.
+      ignored: ["**/src-tauri/**", "**/target/**"],
     },
   },
 }));
