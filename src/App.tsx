@@ -168,6 +168,11 @@ const products: ProductDefinition[] = [
   },
 ];
 
+/** The display name for a slug, for progress events that arrive before any list does. */
+function productNameFor(slug: string): string {
+  return products.find((product) => product.slug === slug)?.name ?? slug;
+}
+
 const navItems: NavItem[] = [
   {
     id: "installed-apps",
@@ -1003,60 +1008,96 @@ function DownloadHistoryCard({
   );
 }
 
+/**
+ * One product transfer in flight.
+ *
+ * Keyed by slug in the map below, because installs of different products run
+ * concurrently and each needs its own progress. There used to be a single slot for
+ * stage, progress and message, which meant two installs overwrote each other on every
+ * event and the panel flickered between them.
+ */
+type Transfer = {
+  slug: string;
+  name: string;
+  stage: DownloadStage;
+  progress: number;
+  message: string;
+  error?: string;
+};
+
+/** Stages where work is still happening. Anything else is finished. */
+const ACTIVE_STAGES: readonly DownloadStage[] = [
+  "checking",
+  "downloading",
+  "installing",
+  "launching",
+  "uninstalling",
+];
+
+function isActiveTransfer(transfer: Transfer | undefined): boolean {
+  return transfer !== undefined && ACTIVE_STAGES.includes(transfer.stage);
+}
+
 function DownloadsPanel({
-  showActiveDownload,
-  activeProductName,
-  downloadStage,
-  downloadProgress,
-  statusMessage,
-  errorMessage,
+  transfers,
   history,
   onDismissHistory,
 }: {
-  showActiveDownload: boolean;
-  activeProductName: string;
-  downloadStage: DownloadStage;
-  downloadProgress: number;
-  statusMessage: string;
-  errorMessage: string;
+  /** Everything currently in flight, in whatever order it started. */
+  transfers: Transfer[];
   history: DownloadHistoryItem[];
   onDismissHistory: (id: string) => void;
 }) {
-  if (showActiveDownload) {
-    return (
-      <section className="card p-4">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <p className="label">Active transfer</p>
-            <h3 className="mt-1.5 text-[15px] font-semibold tracking-tight text-ink">{activeProductName}</h3>
-          </div>
-          <span className="pill shrink-0">{stageLabels[downloadStage]}</span>
-        </div>
-
-        <div className="mt-4 flex items-center gap-3">
-          <div className="progress-track h-1.5 flex-1">
-            <div className="progress-fill h-full" style={{ width: `${downloadProgress}%` }} />
-          </div>
-          <span className="mono shrink-0 text-[11px] text-ink-dim">{downloadProgress}%</span>
-        </div>
-
-        <p className="mt-3 text-[12px] leading-5 text-ink-dim">{statusMessage}</p>
-        {errorMessage ? <p className="mt-2 text-[12px] text-bad">{errorMessage}</p> : null}
-      </section>
-    );
-  }
-
   return (
-    <section className="card p-4">
-      <div className="flex items-baseline justify-between gap-3">
-        <h3 className="text-[14px] font-semibold tracking-tight text-ink">No downloads</h3>
-        {history.length > 0 ? <span className="pill">{history.length} recent</span> : null}
-      </div>
-      {history.length > 0 ? (
-        <div className="mt-4 space-y-2">
-          {history.map((item) => (
-            <DownloadHistoryCard key={item.id} item={item} onDismiss={() => onDismissHistory(item.id)} />
+    <section className="flex flex-col gap-3">
+      {transfers.length > 0 ? (
+        <ul className="flex flex-col gap-2">
+          {transfers.map((transfer, index) => (
+            <li
+              key={transfer.slug}
+              className="card rise p-4"
+              style={{ animationDelay: `${index * 40}ms` }}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="label">{stageLabels[transfer.stage]}</p>
+                  <h3 className="mt-1.5 truncate text-[15px] font-semibold tracking-tight text-ink">
+                    {transfer.name}
+                  </h3>
+                </div>
+                <span className="mono shrink-0 text-[12px] text-ink-dim">{transfer.progress}%</span>
+              </div>
+
+              <div className="progress-track mt-3 h-1.5">
+                <div className="progress-fill h-full" style={{ width: `${transfer.progress}%` }} />
+              </div>
+
+              <p className="mt-2 text-[12px] leading-5 text-ink-dim">{transfer.message}</p>
+              {transfer.error ? <p className="mt-1 text-[12px] text-bad">{transfer.error}</p> : null}
+            </li>
           ))}
+        </ul>
+      ) : (
+        <div className="card p-4">
+          <h3 className="text-[14px] font-semibold tracking-tight text-ink">No downloads</h3>
+        </div>
+      )}
+
+      {history.length > 0 ? (
+        <div className="card p-4">
+          <div className="flex items-baseline justify-between gap-3">
+            <h3 className="text-[14px] font-semibold tracking-tight text-ink">Recent</h3>
+            <span className="pill">{history.length}</span>
+          </div>
+          <div className="mt-3 space-y-2">
+            {history.map((item) => (
+              <DownloadHistoryCard
+                key={item.id}
+                item={item}
+                onDismiss={() => onDismissHistory(item.id)}
+              />
+            ))}
+          </div>
         </div>
       ) : null}
     </section>
@@ -1294,12 +1335,14 @@ function App() {
   const [activeSection, setActiveSection] = useState<SectionId>("installed-apps");
   const [searchQuery, setSearchQuery] = useState("");
   const [productStatuses, setProductStatuses] = useState<Record<string, ProductStatus>>({});
-  const [activeProductSlug, setActiveProductSlug] = useState<string | null>(null);
-  const [downloadStage, setDownloadStage] = useState<DownloadStage>("checking");
-  const [downloadProgress, setDownloadProgress] = useState(0);
-  const [busy, setBusy] = useState(false);
-  const [statusMessage, setStatusMessage] = useState("Checking local install state...");
-  const [errorMessage, setErrorMessage] = useState("");
+  /**
+   * Transfers, keyed by product slug.
+   *
+   * A map rather than a single slot: installs of different products run at the same
+   * time, and each one's progress has to survive the other's events. With one slot the
+   * panel alternated between two downloads on every event.
+   */
+  const [transfers, setTransfers] = useState<Record<string, Transfer>>({});
   const [downloadHistory, setDownloadHistory] = useState<DownloadHistoryItem[]>([]);
   const [launchOverlayProduct, setLaunchOverlayProduct] = useState<string | null>(null);
   // The Workflows tab's buttons live in the section header, so their state lives here.
@@ -1334,7 +1377,6 @@ function App() {
     })();
   }, []);
 
-  const activeProduct = products.find((product) => product.slug === activeProductSlug) ?? null;
   const profileName = member?.full_name?.trim() || authSession?.user?.email || "APRO member";
   const profileSubtitle = member?.member_type ? `${member.member_type} member` : "Approved member";
 
@@ -1368,10 +1410,14 @@ function App() {
     return memberRow as MemberRecord;
   }
 
+  /**
+   * Read what is installed.
+   *
+   * This used to drive the download panel's stage and message, which conflated "we are
+   * looking at the disk" with "something is transferring". A failure is a snackbar,
+   * because it is not a transfer and does not belong in the transfers list.
+   */
   async function refreshProductStatuses() {
-    setDownloadStage("checking");
-    setStatusMessage("Checking local install state...");
-
     try {
       const statuses = await Promise.all(
         products.map(async (product) => {
@@ -1385,14 +1431,12 @@ function App() {
       );
 
       setProductStatuses(Object.fromEntries(statuses));
-      setDownloadStage("idle");
-      setDownloadProgress(0);
-      setStatusMessage("Products are available to install or launch.");
-      setErrorMessage("");
     } catch (error) {
-      setDownloadStage("error");
-      setErrorMessage(String(error));
-      setStatusMessage("Unable to determine product state.");
+      setSnackbar({
+        visible: true,
+        title: "Could not read install state",
+        detail: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -1586,17 +1630,18 @@ function App() {
     saveAccentId(id);
   }
 
+  // Leaving the panel clears the log and drops finished transfers, so coming back shows
+  // only what is still running. In-flight ones are kept — they are still happening, and
+  // discarding them would strand a running install with nowhere to report.
   useEffect(() => {
-    if (activeSection !== "downloads") {
-      setDownloadHistory([]);
-      if (!busy) {
-        setErrorMessage("");
-        setDownloadProgress(0);
-        setDownloadStage("idle");
-        setStatusMessage("Products are available to install or launch.");
-      }
-    }
-  }, [activeSection, busy]);
+    if (activeSection === "downloads") return;
+    setDownloadHistory([]);
+    setTransfers((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([, transfer]) => isActiveTransfer(transfer)),
+      ),
+    );
+  }, [activeSection]);
 
   useEffect(() => {
     if (!snackbar.visible) {
@@ -1610,19 +1655,27 @@ function App() {
     return () => window.clearTimeout(timeout);
   }, [snackbar.visible, snackbar.title, snackbar.detail]);
 
+  /**
+   * One event handler for every product. The payload carries the slug, so each
+   * transfer is updated in its own slot.
+   */
   useEffect(() => {
     let unlisten: (() => void) | undefined;
 
     void getCurrentWindow()
       .listen<ProductProgressPayload>("product-progress", (event) => {
-        setActiveProductSlug(event.payload.slug);
-        const nextPhase = event.payload.phase as DownloadStage;
-        setDownloadStage(nextPhase);
-        setDownloadProgress(event.payload.progress);
-        setStatusMessage(event.payload.message);
-        if (nextPhase !== "error") {
-          setErrorMessage("");
-        }
+        const { slug, phase, progress, message } = event.payload;
+        setTransfers((current) => ({
+          ...current,
+          [slug]: {
+            slug,
+            name: current[slug]?.name ?? productNameFor(slug),
+            stage: phase as DownloadStage,
+            progress,
+            message,
+            error: phase === "error" ? message : undefined,
+          },
+        }));
       })
       .then((dispose) => {
         unlisten = dispose;
@@ -1682,32 +1735,57 @@ function App() {
     }
   }
 
+  /**
+   * Start a transfer for one product.
+   *
+   * Only this product's slot is touched, so a second install running alongside is
+   * unaffected. There is no global "busy": a per-product flag derived from the
+   * transfers map is what disables the right buttons, and it used to be a single
+   * boolean that the first install to finish would clear for everyone.
+   */
+  function beginTransfer(product: ProductDefinition, stage: DownloadStage, message: string) {
+    setTransfers((current) => ({
+      ...current,
+      [product.slug]: {
+        slug: product.slug,
+        name: product.name,
+        stage,
+        progress: 0,
+        message,
+      },
+    }));
+  }
+
   async function handleProductAction(product: ProductDefinition) {
     const currentStatus = productStatuses[product.slug];
-    setBusy(true);
-    setErrorMessage("");
-    setActiveProductSlug(product.slug);
+    setActiveSection("downloads");
 
     try {
       if (currentStatus?.installed && !currentStatus.update_available) {
-        setDownloadStage("launching");
-        setDownloadProgress(100);
-        setStatusMessage(`Launching ${product.name}...`);
+        beginTransfer(product, "launching", `Launching ${product.name}…`);
         setLaunchOverlayProduct(product.name);
         await invoke("launch_product", {
           slug: product.slug,
           exePath: product.executablePath,
         });
         await new Promise((resolve) => window.setTimeout(resolve, 900));
-        setDownloadStage("ready");
-        setStatusMessage("Launch command sent successfully.");
+        setTransfers((current) => ({
+          ...current,
+          [product.slug]: {
+            ...current[product.slug],
+            stage: "ready",
+            progress: 100,
+            message: "Launch command sent.",
+          },
+        }));
       } else {
-        setDownloadStage("downloading");
-        setDownloadProgress(0);
-        setStatusMessage(
-          currentStatus?.update_available ? `Updating ${product.name}...` : `Downloading ${product.name}...`,
+        beginTransfer(
+          product,
+          "downloading",
+          currentStatus?.update_available
+            ? `Updating ${product.name}…`
+            : `Downloading ${product.name}…`,
         );
-        setActiveSection("downloads");
 
         const status = await invoke<ProductStatus>("install_product", {
           slug: product.slug,
@@ -1719,13 +1797,17 @@ function App() {
           ...current,
           [product.slug]: status,
         }));
-        setDownloadStage("ready");
-        setDownloadProgress(100);
-        setStatusMessage(
-          currentStatus?.update_available
-            ? `Update completed. ${product.name} is ready.`
-            : `Install completed. ${product.name} is ready.`,
-        );
+        setTransfers((current) => ({
+          ...current,
+          [product.slug]: {
+            ...current[product.slug],
+            stage: "ready",
+            progress: 100,
+            message: currentStatus?.update_available
+              ? "Update completed."
+              : "Install completed.",
+          },
+        }));
         setDownloadHistory((current) => [
           {
             id: `${product.slug}-${Date.now()}`,
@@ -1737,11 +1819,21 @@ function App() {
         ]);
       }
     } catch (error) {
-      const detail = String(error);
-      setActiveSection("downloads");
-      setDownloadStage("error");
-      setErrorMessage(detail);
-      setStatusMessage(currentStatus?.update_available ? `Unable to update ${product.name}.` : `Unable to install ${product.name}.`);
+      const detail = error instanceof Error ? error.message : String(error);
+      setTransfers((current) => ({
+        ...current,
+        [product.slug]: {
+          ...current[product.slug],
+          slug: product.slug,
+          name: product.name,
+          stage: "error",
+          progress: current[product.slug]?.progress ?? 0,
+          message: currentStatus?.update_available
+            ? `Unable to update ${product.name}.`
+            : `Unable to install ${product.name}.`,
+          error: detail,
+        },
+      }));
       setDownloadHistory((current) => [
         {
           id: `${product.slug}-error-${Date.now()}`,
@@ -1753,14 +1845,11 @@ function App() {
       ]);
     } finally {
       setLaunchOverlayProduct(null);
-      setBusy(false);
     }
   }
 
   async function handleUninstallProduct(product: ProductDefinition) {
-    setBusy(true);
-    setErrorMessage("");
-    setActiveProductSlug(product.slug);
+    beginTransfer(product, "uninstalling", `Removing ${product.name}…`);
 
     try {
       const status = await invoke<ProductStatus>("uninstall_product", {
@@ -1771,22 +1860,34 @@ function App() {
         ...current,
         [product.slug]: status,
       }));
-      setDownloadStage("idle");
-      setDownloadProgress(0);
-      setStatusMessage("Product is available to install.");
+      setTransfers((current) => {
+        const next = { ...current };
+        delete next[product.slug];
+        return next;
+      });
       setSnackbar({
         visible: true,
         title: "App uninstalled",
         detail: `${product.name} was removed from this device.`,
       });
     } catch (error) {
+      setTransfers((current) => ({
+        ...current,
+        [product.slug]: {
+          ...current[product.slug],
+          slug: product.slug,
+          name: product.name,
+          stage: "error",
+          progress: 0,
+          message: `Unable to remove ${product.name}.`,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      }));
       setSnackbar({
         visible: true,
         title: "Uninstall failed",
-        detail: String(error),
+        detail: error instanceof Error ? error.message : String(error),
       });
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -1803,9 +1904,23 @@ function App() {
   const filteredInstallableProducts = installableProducts.filter(matchesSearch);
   const availableProductsCount = products.length;
   const installedProductsCount = installedProducts.length;
-  const showActiveDownload =
-    activeSection === "downloads" &&
-    (busy || downloadStage === "downloading" || downloadStage === "installing" || downloadStage === "uninstalling");
+
+  /**
+   * Everything in flight, and the set of slugs that are busy.
+   *
+   * Derived from the transfers map rather than stored, so there is one source of truth:
+   * a product is busy exactly when it has an active transfer. Previously a single
+   * `busy` boolean was set by whichever install started last and cleared by whichever
+   * finished first, which is why a second install freed the first one's button.
+   */
+  const activeTransfers = useMemo(
+    () => Object.values(transfers).filter(isActiveTransfer),
+    [transfers],
+  );
+  const busySlugs = useMemo(
+    () => new Set(activeTransfers.map((transfer) => transfer.slug)),
+    [activeTransfers],
+  );
 
   const updatesWaiting = products.filter(
     (product) => productStatuses[product.slug]?.update_available,
@@ -2073,7 +2188,7 @@ function App() {
                                 <button
                                   type="button"
                                   onClick={() => void handleProductAction(product)}
-                                  disabled={busy && activeProductSlug === product.slug}
+                                  disabled={busySlugs.has(product.slug)}
                                   className="btn btn-quiet"
                                 >
                                   Update
@@ -2082,7 +2197,7 @@ function App() {
                               <button
                                 type="button"
                                 onClick={() => void handleUninstallProduct(product)}
-                                disabled={busy && activeProductSlug === product.slug}
+                                disabled={busySlugs.has(product.slug)}
                                 className="btn btn-danger"
                               >
                                 Remove
@@ -2108,7 +2223,7 @@ function App() {
                         key={product.slug}
                         index={index}
                         product={product}
-                        busy={busy && activeProductSlug === product.slug}
+                        busy={busySlugs.has(product.slug)}
                         onInstall={() => void handleProductAction(product)}
                       />
                     ))}
@@ -2139,7 +2254,7 @@ function App() {
                           index={index}
                           product={product}
                           updateAvailable={Boolean(productStatuses[product.slug]?.update_available)}
-                          busy={busy && activeProductSlug === product.slug}
+                          busy={busySlugs.has(product.slug)}
                           onLaunch={() => void handleProductAction(product)}
                           onUpdate={() => void handleProductAction(product)}
                         />
@@ -2172,12 +2287,7 @@ function App() {
 
             {activeSection === "downloads" && (
               <DownloadsPanel
-                showActiveDownload={showActiveDownload}
-                activeProductName={activeProduct?.name ?? "Product"}
-                downloadStage={downloadStage}
-                downloadProgress={downloadProgress}
-                statusMessage={statusMessage}
-                errorMessage={errorMessage}
+                transfers={activeTransfers}
                 history={downloadHistory}
                 onDismissHistory={(id) =>
                   setDownloadHistory((current) => current.filter((entry) => entry.id !== id))

@@ -1,10 +1,12 @@
 use reqwest::blocking::{Client, Response};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     fs,
     io::{copy, Cursor, Read},
     path::{Component, Path, PathBuf},
     process::Command,
+    sync::{Mutex, OnceLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Manager};
@@ -354,48 +356,176 @@ fn stop_running_product_process(executable_path: &Path) -> Result<(), String> {
     }
 }
 
+/// Where each phase sits on the progress bar.
+///
+/// These bands are the contract between this side and the progress bar, and they have
+/// to be non-overlapping and never decreasing. They were not: the "extracting" step
+/// announced 74 and the first archive entry then reported 70, so at exactly the moment
+/// a user was watching, the bar jumped backwards. Every constant and formula below is
+/// covered by `the_whole_sequence_only_ever_moves_forward`, which is the test that
+/// would have caught it.
+mod band {
+    /// Nothing received yet. Not zero: a bar that sits at 0 looks stalled.
+    pub const DOWNLOAD_START: u8 = 1;
+    pub const DOWNLOAD_END: u8 = 70;
+    /// Stopping a running copy and clearing the previous install.
+    pub const PREPARE: u8 = 71;
+    pub const EXTRACT_START: u8 = 72;
+    pub const EXTRACT_END: u8 = 99;
+    pub const READY: u8 = 100;
+
+    /// Progress across the download band.
+    ///
+    /// An unknown total stays at the start of the band rather than pretending to
+    /// advance, and a server that over-reports cannot push past the end of it.
+    pub fn download(done: u64, total: Option<u64>) -> u8 {
+        match total {
+            Some(total) if total > 0 => {
+                let span = u64::from(DOWNLOAD_END - DOWNLOAD_START);
+                DOWNLOAD_START + (done.saturating_mul(span) / total).min(span) as u8
+            }
+            _ => DOWNLOAD_START,
+        }
+    }
+
+    /// Progress across the extract band.
+    ///
+    /// Counted over **files**, not archive entries: a directory is created instantly,
+    /// so counting them made a zip with many folders appear to stall through its first
+    /// half and then lurch.
+    pub fn extract(files_done: usize, files_total: usize) -> u8 {
+        if files_total == 0 {
+            return EXTRACT_START;
+        }
+        let span = u64::from(EXTRACT_END - EXTRACT_START);
+        let done = (files_done as u64).min(files_total as u64);
+        EXTRACT_START + (done.saturating_mul(span) / files_total as u64) as u8
+    }
+}
+
+/// Slugs with an install in flight.
+///
+/// Installs of *different* products are independent and run concurrently — the user
+/// asked for that. Two installs of the *same* product would both clear and rewrite the
+/// same directory, so the second is refused rather than allowed to corrupt the first.
+fn installs_in_flight() -> &'static Mutex<HashSet<String>> {
+    static SET: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    SET.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Releases the slot however the install ends, including on an early return or a panic.
+struct InstallSlot(String);
+
+impl Drop for InstallSlot {
+    fn drop(&mut self) {
+        if let Ok(mut set) = installs_in_flight().lock() {
+            set.remove(&self.0);
+        }
+    }
+}
+
+fn claim_install_slot(slug: &str) -> Result<InstallSlot, String> {
+    let mut set = installs_in_flight()
+        .lock()
+        .map_err(|_| "The install registry is unavailable.".to_string())?;
+    if !set.insert(slug.to_string()) {
+        return Err(format!("{slug} is already being installed."));
+    }
+    Ok(InstallSlot(slug.to_string()))
+}
+
+/// Read a response body, reporting progress across the download band.
+fn read_body_with_progress(
+    app: &AppHandle,
+    slug: &str,
+    response: &mut Response,
+) -> Result<Vec<u8>, String> {
+    let total = response.content_length();
+    // Pre-sizing is a hint, not a promise: a wrong or hostile Content-Length must not
+    // make this allocate gigabytes up front.
+    let hint = total.unwrap_or(0).min(512 * 1024 * 1024) as usize;
+    let mut bytes = Vec::with_capacity(hint);
+    let mut buffer = [0_u8; 512 * 1024];
+    let mut downloaded = 0_u64;
+    let mut last_emitted = band::DOWNLOAD_START;
+    let mut last_emit_at = Instant::now();
+
+    loop {
+        let read = response
+            .read(&mut buffer)
+            .map_err(|err| format!("Failed to read product archive: {err}"))?;
+        if read == 0 {
+            break;
+        }
+
+        bytes.extend_from_slice(&buffer[..read]);
+        downloaded += read as u64;
+
+        let progress = band::download(downloaded, total);
+        if progress > last_emitted || last_emit_at.elapsed() >= Duration::from_millis(160) {
+            last_emitted = last_emitted.max(progress);
+            last_emit_at = Instant::now();
+
+            emit_progress(
+                app,
+                ProductProgress {
+                    slug: slug.to_string(),
+                    phase: "downloading".into(),
+                    progress,
+                    message: match total {
+                        Some(total) => format!(
+                            "Downloading… {}%",
+                            (downloaded.saturating_mul(100) / total.max(1)).min(100)
+                        ),
+                        None => "Downloading…".into(),
+                    },
+                },
+            );
+        }
+    }
+
+    Ok(bytes)
+}
+
 fn extract_product_archive_with_progress(
     bytes: Vec<u8>,
     install_dir: &Path,
     progress_context: Option<(&AppHandle, &str)>,
 ) -> Result<(), String> {
-    let mut entry_paths = Vec::new();
-    let mut path_archive =
-        ZipArchive::new(Cursor::new(bytes.clone())).map_err(|err| format!("Invalid zip archive: {err}"))?;
+    // One pass to learn the shape of the archive, then a second to write it.
+    //
+    // `by_index` borrows only for the entry's lifetime, so the same archive serves both
+    // passes. The previous version cloned the whole buffer to build a second archive
+    // just to count entries, which doubled peak memory for a 9 MB installer.
+    let mut archive =
+        ZipArchive::new(Cursor::new(bytes)).map_err(|err| format!("Invalid zip archive: {err}"))?;
 
-    for index in 0..path_archive.len() {
-        let entry = path_archive
+    let mut entries: Vec<(PathBuf, bool)> = Vec::with_capacity(archive.len());
+    for index in 0..archive.len() {
+        let entry = archive
             .by_index(index)
             .map_err(|err| format!("Failed to inspect archive entry: {err}"))?;
         if let Some(path) = entry.enclosed_name() {
-            entry_paths.push(path.to_path_buf());
+            entries.push((path.to_path_buf(), entry.is_dir()));
         }
     }
 
-    let common_root = common_root_component(&entry_paths);
+    let paths: Vec<PathBuf> = entries.iter().map(|(path, _)| path.clone()).collect();
+    let common_root = common_root_component(&paths);
+    let files_total = entries.iter().filter(|(_, is_dir)| !*is_dir).count().max(1);
+    let mut files_done = 0_usize;
 
-    let mut archive =
-        ZipArchive::new(Cursor::new(bytes)).map_err(|err| format!("Invalid zip archive: {err}"))?;
-    let total_entries = archive.len().max(1);
     fs::create_dir_all(install_dir).map_err(|err| format!("Failed to create install directory: {err}"))?;
 
-    for index in 0..archive.len() {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|err| format!("Failed to extract archive entry: {err}"))?;
-
-        let Some(enclosed_path) = entry.enclosed_name() else {
-            continue;
-        };
-
+    for (index, (enclosed_path, is_dir)) in entries.iter().enumerate() {
         let relative_path = if let Some(root) = &common_root {
             let root_path = Path::new(root);
             enclosed_path
                 .strip_prefix(root_path)
-                .unwrap_or(&enclosed_path)
+                .unwrap_or(enclosed_path)
                 .to_path_buf()
         } else {
-            enclosed_path
+            enclosed_path.clone()
         };
 
         if relative_path.as_os_str().is_empty() {
@@ -404,7 +534,7 @@ fn extract_product_archive_with_progress(
 
         let output_path = install_dir.join(relative_path);
 
-        if entry.is_dir() {
+        if *is_dir {
             fs::create_dir_all(&output_path)
                 .map_err(|err| format!("Failed to create directory {}: {err}", output_path.display()))?;
             continue;
@@ -415,20 +545,25 @@ fn extract_product_archive_with_progress(
                 .map_err(|err| format!("Failed to create directory {}: {err}", parent.display()))?;
         }
 
-        let mut output_file = fs::File::create(&output_path)
-            .map_err(|err| format!("Failed to create file {}: {err}", output_path.display()))?;
-        copy(&mut entry, &mut output_file)
-            .map_err(|err| format!("Failed to write file {}: {err}", output_path.display()))?;
+        {
+            let mut entry = archive
+                .by_index(index)
+                .map_err(|err| format!("Failed to extract archive entry: {err}"))?;
+            let mut output_file = fs::File::create(&output_path)
+                .map_err(|err| format!("Failed to create file {}: {err}", output_path.display()))?;
+            copy(&mut entry, &mut output_file)
+                .map_err(|err| format!("Failed to write file {}: {err}", output_path.display()))?;
+        }
 
+        files_done += 1;
         if let Some((app, slug)) = progress_context {
-            let progress = 70 + (((index + 1) * 25) / total_entries) as u8;
             emit_progress(
                 app,
                 ProductProgress {
                     slug: slug.to_string(),
                     phase: "installing".into(),
-                    progress,
-                    message: format!("Installing files... ({}/{})", index + 1, total_entries),
+                    progress: band::extract(files_done, files_total),
+                    message: format!("Installing files… ({files_done}/{files_total})"),
                 },
             );
         }
@@ -469,6 +604,9 @@ fn get_product_status_sync(slug: String, url: String, exe_path: String) -> Resul
 }
 
 fn install_product_sync(app: AppHandle, slug: String, url: String, exe_path: String) -> Result<ProductStatus, String> {
+    // Refuse a second install of the same product. Different products run side by side.
+    let _slot = claim_install_slot(&slug)?;
+
     let install_dir = product_install_dir(&slug)?;
     let executable_path = product_executable_path(&slug, &exe_path)?;
     let local_archive_path = is_local_archive_path(&url).then(|| PathBuf::from(&url));
@@ -482,82 +620,40 @@ fn install_product_sync(app: AppHandle, slug: String, url: String, exe_path: Str
         ProductProgress {
             slug: slug.clone(),
             phase: "downloading".into(),
-            progress: 0,
-            message: "Starting download...".into(),
+            progress: band::DOWNLOAD_START,
+            message: "Starting download…".into(),
         },
     );
 
     let client = download_client()?;
-    let archive_signature = if let Some(local_path) = &local_archive_path {
-        resolve_local_archive_signature(local_path)?
-    } else {
-        let response = resolve_download_response(&client, &url)?;
-        response_signature(&response)
-    };
 
-    let bytes = if let Some(local_path) = &local_archive_path {
+    // One request.
+    //
+    // This used to call `resolve_download_response` twice — once to read the headers for
+    // the install receipt, and again to read the body — so every install asked the
+    // server for the archive twice. The signature now comes from the same response whose
+    // bytes are written.
+    let (archive_signature, bytes) = if let Some(local_path) = &local_archive_path {
+        let signature = resolve_local_archive_signature(local_path)?;
+
         emit_progress(
             &app,
             ProductProgress {
                 slug: slug.clone(),
                 phase: "downloading".into(),
-                progress: 70,
-                message: format!("Reading local archive {}...", local_path.display()),
+                progress: band::DOWNLOAD_START,
+                message: format!("Reading local archive {}…", local_path.display()),
             },
         );
 
-        fs::read(local_path).map_err(|err| format!("Failed to read local archive {}: {err}", local_path.display()))?
+        let bytes = fs::read(local_path)
+            .map_err(|err| format!("Failed to read local archive {}: {err}", local_path.display()))?;
+        (signature, bytes)
     } else {
         let mut response = resolve_download_response(&client, &url)?;
-        let total_size = response.content_length();
-        let mut bytes = Vec::new();
-        let mut downloaded = 0_u64;
-        let mut buffer = [0_u8; 512 * 1024];
-        let mut last_progress = 0_u8;
-        let mut last_emit_at = Instant::now();
-
-        loop {
-            let read = response
-                .read(&mut buffer)
-                .map_err(|err| format!("Failed to read product archive: {err}"))?;
-            if read == 0 {
-                break;
-            }
-
-            bytes.extend_from_slice(&buffer[..read]);
-            downloaded += read as u64;
-
-            let progress = if let Some(total) = total_size {
-                ((downloaded.saturating_mul(70)) / total.max(1)) as u8
-            } else {
-                0
-            };
-
-            let bounded_progress = progress.min(70);
-            let should_emit = bounded_progress > last_progress
-                || last_emit_at.elapsed() >= Duration::from_millis(250);
-
-            if should_emit {
-                last_progress = bounded_progress;
-                last_emit_at = Instant::now();
-
-                emit_progress(
-                    &app,
-                    ProductProgress {
-                        slug: slug.clone(),
-                        phase: "downloading".into(),
-                        progress: bounded_progress,
-                        message: if let Some(total) = total_size {
-                            format!("Downloading archive... {}%", ((downloaded.saturating_mul(100)) / total.max(1)).min(100))
-                        } else {
-                            "Downloading archive...".into()
-                        },
-                    },
-                );
-            }
-        }
-
-        bytes
+        let signature = response_signature(&response);
+        let bytes = read_body_with_progress(&app, &slug, &mut response)?;
+        (signature, bytes)
     };
 
     emit_progress(
@@ -565,8 +661,8 @@ fn install_product_sync(app: AppHandle, slug: String, url: String, exe_path: Str
         ProductProgress {
             slug: slug.clone(),
             phase: "installing".into(),
-            progress: 72,
-            message: "Stopping running product before install...".into(),
+            progress: band::PREPARE,
+            message: "Stopping running product before install…".into(),
         },
     );
     let _ = stop_running_product_process(&executable_path);
@@ -581,8 +677,8 @@ fn install_product_sync(app: AppHandle, slug: String, url: String, exe_path: Str
         ProductProgress {
             slug: slug.clone(),
             phase: "installing".into(),
-            progress: 74,
-            message: "Extracting archive...".into(),
+            progress: band::EXTRACT_START,
+            message: "Extracting archive…".into(),
         },
     );
 
@@ -613,7 +709,7 @@ fn install_product_sync(app: AppHandle, slug: String, url: String, exe_path: Str
         ProductProgress {
             slug: slug.clone(),
             phase: "ready".into(),
-            progress: 100,
+            progress: band::READY,
             message: "Install completed successfully.".into(),
         },
     );
@@ -907,4 +1003,107 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{band, claim_install_slot};
+
+    #[test]
+    fn download_progress_stays_inside_its_band() {
+        assert_eq!(band::download(0, Some(100)), band::DOWNLOAD_START);
+        assert_eq!(band::download(100, Some(100)), band::DOWNLOAD_END);
+        // An unknown total must not pretend to advance.
+        assert_eq!(band::download(50, None), band::DOWNLOAD_START);
+        assert_eq!(band::download(50, Some(0)), band::DOWNLOAD_START);
+        // A server that over-reports must not push past the end of the band.
+        assert_eq!(band::download(500, Some(100)), band::DOWNLOAD_END);
+    }
+
+    #[test]
+    fn extract_progress_stays_inside_its_band() {
+        assert_eq!(band::extract(0, 10), band::EXTRACT_START);
+        assert_eq!(band::extract(10, 10), band::EXTRACT_END);
+        // An archive with no files is a state, not a division by zero.
+        assert_eq!(band::extract(0, 0), band::EXTRACT_START);
+        assert!(band::extract(20, 10) <= band::EXTRACT_END);
+    }
+
+    #[test]
+    fn progress_never_decreases_within_a_phase() {
+        let mut previous = band::DOWNLOAD_START;
+        for done in 0..=500_u64 {
+            let value = band::download(done, Some(500));
+            assert!(value >= previous, "download went backwards at {done}: {previous} -> {value}");
+            previous = value;
+        }
+
+        let mut previous = band::EXTRACT_START;
+        for done in 0..=500_usize {
+            let value = band::extract(done, 500);
+            assert!(value >= previous, "extract went backwards at {done}: {previous} -> {value}");
+            previous = value;
+        }
+    }
+
+    /// The regression this module exists for.
+    ///
+    /// The bar visibly jumped backwards at the download/install boundary, because the
+    /// "extracting" step announced 74 and the first archive entry then reported 70.
+    /// Replaying the real emit order is what makes that impossible to reintroduce
+    /// quietly.
+    #[test]
+    fn the_whole_sequence_only_ever_moves_forward() {
+        let mut emitted = vec![
+            band::download(0, Some(100)),
+            band::download(50, Some(100)),
+            band::download(100, Some(100)),
+            band::PREPARE,
+            band::EXTRACT_START,
+        ];
+        for done in 1..=100_usize {
+            emitted.push(band::extract(done, 100));
+        }
+        emitted.push(band::READY);
+
+        for pair in emitted.windows(2) {
+            assert!(
+                pair[1] >= pair[0],
+                "progress went backwards: {} then {}",
+                pair[0],
+                pair[1]
+            );
+        }
+        assert_eq!(*emitted.last().unwrap(), band::READY);
+    }
+
+    #[test]
+    fn the_bands_do_not_overlap() {
+        assert!(band::DOWNLOAD_START < band::DOWNLOAD_END);
+        assert!(band::DOWNLOAD_END < band::PREPARE);
+        assert!(band::PREPARE < band::EXTRACT_START);
+        assert!(band::EXTRACT_START < band::EXTRACT_END);
+        assert!(band::EXTRACT_END < band::READY);
+    }
+
+    /// Concurrent installs of different products are the point; two of the same are
+    /// not, because they would rewrite the same directory.
+    #[test]
+    fn only_one_install_of_a_given_product_can_be_in_flight() {
+        let first = claim_install_slot("apro-cad").expect("the first claim should succeed");
+        assert!(
+            claim_install_slot("apro-cad").is_err(),
+            "a second install of the same product must be refused"
+        );
+        assert!(
+            claim_install_slot("hexadof").is_ok(),
+            "a different product must be independent"
+        );
+
+        drop(first);
+        assert!(
+            claim_install_slot("apro-cad").is_ok(),
+            "the slot must be released when the install ends"
+        );
+    }
 }
