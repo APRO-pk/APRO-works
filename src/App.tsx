@@ -269,8 +269,10 @@ function LoginScreen({
   error: string;
 }) {
   return (
-    <div className="app-canvas flex h-screen items-center justify-center overflow-hidden px-6 text-ink">
-      <div className="w-full max-w-[380px]">
+    <div className="app-canvas relative flex h-screen items-center justify-center overflow-hidden px-6 text-ink">
+      <div className="ambient-bloom" aria-hidden="true" />
+
+      <div className="relative z-10 w-full max-w-[380px]">
         <div className="mb-6 flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-md border border-line bg-raised">
             <img src={logo} alt="" className="h-5 w-auto object-contain" />
@@ -737,6 +739,10 @@ function AppRow({
  * This is the one screen that earns a large card. It is the moment before starting
  * work, so the cards are allowed to be identifiable at a glance rather than
  * uniform — the same reasoning the catalogue uses for rows.
+ *
+ * The icon is centred rather than inline with the name: at this size it is the thing
+ * the eye lands on, and centring it gives every card the same anchor whatever length
+ * the product's name happens to be.
  */
 function LaunchCard({
   product,
@@ -755,7 +761,7 @@ function LaunchCard({
 }) {
   return (
     <article
-      className="card-art card-art rise flex min-h-[196px] flex-col justify-end p-4"
+      className="card-art card-art rise flex min-h-[224px] flex-col p-4"
       style={{ animationDelay: `${index * 60}ms` }}
     >
       {product.backgroundImage ? (
@@ -767,40 +773,49 @@ function LaunchCard({
       <div className="card-art-wash" />
       <div className="card-art-scrim" />
 
-      <div className="relative flex items-end justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line-strong bg-canvas/50 backdrop-blur-sm">
-              {product.iconImage ? (
-                <img src={product.iconImage} alt="" className="h-5 w-5 object-contain" />
-              ) : (
-                <span className="text-[11px] font-semibold text-ink">
-                  {initialsFromName(product.name)}
-                </span>
-              )}
-            </div>
-            <h3 className="truncate text-[15px] font-semibold tracking-tight text-ink drop-shadow-sm">
-              {product.name}
-            </h3>
-          </div>
-          <p className="mt-1.5 truncate text-[11px] text-ink-dim">{product.eyebrow}</p>
+      <div className="relative flex flex-1 flex-col items-center justify-center gap-3 px-2">
+        <div className="flex h-14 w-14 items-center justify-center rounded-lg border border-line-strong bg-canvas/45 backdrop-blur-md">
+          {product.iconImage ? (
+            <img src={product.iconImage} alt="" className="h-9 w-9 object-contain" />
+          ) : (
+            <span className="text-[17px] font-semibold tracking-tight text-ink">
+              {initialsFromName(product.name)}
+            </span>
+          )}
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
-          {updateAvailable ? (
-            <button type="button" onClick={onUpdate} disabled={busy} className="btn btn-quiet">
-              {busy ? "Updating…" : "Update"}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={onLaunch}
-            disabled={busy}
-            className="btn btn-primary glow-swipe min-w-[92px]"
-          >
-            {busy ? "Starting…" : "Launch"}
-          </button>
+        <div className="text-center">
+          <h3 className="truncate text-[15px] font-semibold tracking-tight text-ink drop-shadow-sm">
+            {product.name}
+          </h3>
+          <p className="mt-1 truncate text-[11px] text-ink-dim">{product.eyebrow}</p>
         </div>
+      </div>
+
+      <div className="relative flex items-center justify-end gap-2">
+        {updateAvailable ? (
+          <button type="button" onClick={onUpdate} disabled={busy} className="btn btn-quiet">
+            {busy ? "Updating…" : "Update"}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={onLaunch}
+          disabled={busy}
+          aria-label={`Launch ${product.name}`}
+          title={`Launch ${product.name}`}
+          className="btn-play glow-swipe"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            className="h-4 w-4 shrink-0 translate-x-[1px]"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M8 5.5v13l11-6.5-11-6.5Z" />
+          </svg>
+          <span className="btn-play-label">{busy ? "Starting…" : "Launch"}</span>
+        </button>
       </div>
     </article>
   );
@@ -1012,7 +1027,8 @@ function App() {
   const [loginPassword, setLoginPassword] = useState("");
   const [signingOut, setSigningOut] = useState(false);
   const [accentId, setAccentId] = useState<AccentId>(() => loadAccentId());
-  const [activeSection, setActiveSection] = useState<SectionId>("all-apps");
+  // Installed first: the common case is starting work, not shopping for software.
+  const [activeSection, setActiveSection] = useState<SectionId>("installed-apps");
   const [searchQuery, setSearchQuery] = useState("");
   const [productStatuses, setProductStatuses] = useState<Record<string, ProductStatus>>({});
   const [activeProductSlug, setActiveProductSlug] = useState<string | null>(null);
@@ -1282,7 +1298,7 @@ function App() {
       setMember(null);
       setProductStatuses({});
       setSearchQuery("");
-      setActiveSection("all-apps");
+      setActiveSection("installed-apps");
       setLoginPassword("");
     } finally {
       setSigningOut(false);
