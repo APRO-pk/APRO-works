@@ -30,4 +30,4 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # and so the store can be extracted into its own process later without a rewrite.
 apro-store = { path = "../crates/apro-store" }
 apro-api = { path = "../crates/apro-api" }
-apro-client = { path = "../crates/apro-client" }
+apro-client.workspace = true

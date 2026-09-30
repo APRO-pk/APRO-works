@@ -116,13 +116,13 @@ dependencies = [
 [[package]]
 name = "apro-client"
 version = "0.1.0"
+source = "git+https://github.com/APRO-pk/apro-client?tag=v0.1.0#9f1659142555777c9a29fe949a5d76dd3b081f90"
 dependencies = [
  "apro-types",
  "dirs",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror 2.0.20",
 ]
 
@@ -145,6 +145,7 @@ dependencies = [
 [[package]]
 name = "apro-types"
 version = "0.1.0"
+source = "git+https://github.com/APRO-pk/apro-client?tag=v0.1.0#9f1659142555777c9a29fe949a5d76dd3b081f90"
 dependencies = [
  "serde",
  "thiserror 2.0.20",

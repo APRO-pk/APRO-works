@@ -1,9 +1,0 @@
-[package]
-name = "apro-types"
-description = "Wire types shared by the APRO orchestration store and its client SDK."
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-serde.workspace = true
-thiserror.workspace = true
