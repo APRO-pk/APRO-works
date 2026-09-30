@@ -20,11 +20,15 @@ src-tauri/              Tauri host: product install/launch + store lifecycle
 crates/
   apro-store/           Storage engine: SQLite, content-addressed blobs, event log
   apro-api/             Loopback HTTP surface + launch-ticket/session auth
-  apro-client/          Client SDK — the only dependency an app needs
   aproctl/              Operator CLI: serve, seed, purge-demo, doctor, selftest
 harness/                Cross-application verification (its own workspace — see below)
 docs/                   Integration and validation guides
 ```
+
+The client SDK is **not** in this repository. `apro-client` and its `apro-types` wire
+vocabulary are published from [APRO-pk/apro-client](https://github.com/APRO-pk/apro-client)
+and consumed here as a pinned git dependency, exactly as a product app consumes it. Keeping
+one copy means the platform cannot drift from the artifact it hands out.
 
 `apro-store` and `apro-api` deliberately do **not** depend on Tauri, so the store can be
 extracted into its own process later without a rewrite.
@@ -38,10 +42,10 @@ npm run tauri dev
 
 # Build and validate the orchestration layer
 cargo build -p aproctl
-cargo test --workspace          # 37 tests
+cargo test --workspace          # 29 tests (the SDK's own tests run in its repo)
 aproctl selftest                # 16 behavioural checks on a throwaway store
 aproctl doctor                  # inspect the real store
-npm run verify:workflow         # 28 checks on the workflow graph rules
+npm run verify:workflow         # 30 checks on the workflow graph rules
 ```
 
 ## Cross-application verification (`harness/`)

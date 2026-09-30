@@ -6,13 +6,13 @@
 
 ## Implementation status
 
-Built and tested (37 workspace tests, 28 `npm run verify:workflow` checks, 16 `aproctl selftest` checks):
+Built and tested (29 workspace tests, 30 `npm run verify:workflow` checks, 16 `aproctl selftest` checks):
 
 | Crate | Contents |
 | --- | --- |
 | `crates/apro-store` | SQLite schema + migrations, content-addressed blob store, push/pull, revisions, dependency edges, event log, demo seed/purge |
 | `crates/apro-api` | axum server on loopback, launch-ticket → session auth, full endpoint set, 512 MiB body limit |
-| `crates/apro-client` | `AproStoreClient` trait, `HttpStoreClient`, `LocalStoreClient`, launch-environment discovery |
+| `apro-client` (external) | `AproStoreClient` trait, `HttpStoreClient`, launch-environment discovery. Published from [APRO-pk/apro-client](https://github.com/APRO-pk/apro-client) and pinned here as a git tag; `LocalStoreClient` lives in `aproctl` because it is the one implementation that needs SQLite |
 | `crates/aproctl` | `serve`, `seed`, `purge-demo`, `doctor`, `selftest`, `ls`, `edges`, `events`, `stats` |
 | `src-tauri` | Store lifecycle in-process, ticket minting via the auth registry, `--apro-store-endpoint` handoff, `get_store_status` / `seed_store_demo` / `purge_store_demo` commands |
 
@@ -104,8 +104,12 @@ APRO-works/
     apro-schemas/       # .proto sources + prost-build codegen (build.rs)
     apro-store/         # storage engine: SQLite, blob store, event log. No HTTP, no Tauri.
     apro-api/           # axum server on 127.0.0.1 + auth + DTOs. Wraps apro-store.
-    apro-client/        # the trait + types every product app depends on
 ```
+
+`apro-client` was originally planned as a fourth crate here. It is now published from its own
+repository instead, so a product app can depend on the SDK without a checkout of the platform.
+The dependency still points one way: `apro-store` and `apro-api` sit behind the API, and the
+SDK knows nothing about either.
 
 `apro-store` and `apro-api` must not depend on `tauri`, and must not import from `lib.rs`. That is the boundary that keeps D9 honest.
 
@@ -432,7 +436,7 @@ These are cheap to adopt now and expensive to retrofit:
 3. **Never change a field's type or meaning.** That is a new type id or a new major version.
 4. **Breaking changes get a new type id** (`.../grain-geometry-v2`), never an in-place edit. Both versions coexist; migration is an app concern.
 
-   Type-id segments are kebab-case only (`a-z`, `0-9`, `-`), so version with a hyphen: `-v2`, never `.v2`. The dot form is rejected as an invalid type id by both `TypeId::parse` (`crates/apro-store/src/model.rs`) and the HTTP API.
+   Type-id segments are kebab-case only (`a-z`, `0-9`, `-`), so version with a hyphen: `-v2`, never `.v2`. The dot form is rejected as an invalid type id by both `TypeId::parse` (`apro-types/src/model.rs`, in the `apro-client` repository) and the HTTP API.
 5. **Adopt `buf` in CI**, specifically `buf breaking`, to enforce rules 1–3 mechanically rather than by discipline.
 
 ### 6.4 The re-serialization rule (D12)

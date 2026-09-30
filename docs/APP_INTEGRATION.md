@@ -15,7 +15,7 @@ as the spec for the integration; see [§12 Integration checklist](#12-integratio
 
 ```rust
 use apro_client::{AproStoreClient, HttpStoreClient};
-use apro_store::{Encoding, TypeId};
+use apro_client::{Encoding, TypeId};
 
 // 1. Connect. Returns None when not launched by the hub -> degrade, don't crash.
 let Some(store) = HttpStoreClient::from_launch_environment()? else {
@@ -101,19 +101,27 @@ and serialization so your app does not have to.
 ```toml
 # In your app's src-tauri/Cargo.toml
 [dependencies]
-apro-client = { path = "../../APRO-works/crates/apro-client" }
+apro-client = { git = "https://github.com/APRO-pk/apro-client", tag = "v0.1.0" }
 ```
 
-Because the store crates live in the `APRO-works` workspace, the simplest local setup is a
-path dependency (as above). Switch to a git dependency once the workspace is pushed to a
-shared remote.
+The SDK is published from
+[APRO-pk/apro-client](https://github.com/APRO-pk/apro-client), separately from this platform
+repository, so an app does not need a checkout of APRO Works to build. **Pin the tag** rather
+than tracking a branch — an app should only move SDK version deliberately.
 
-`apro-client` re-exports the storage types, so `use apro_client::apro_store::{...}` also
-works if you prefer a single import path.
+`apro-client` re-exports every wire type from its crate root, so a single dependency gives you
+`AppInterface`, `EdgeRequest`, `Mode`, `TypeId` and the rest:
 
-**Do not depend on `apro-store` directly.** That is the server-side engine; apps should only
-ever see `apro-client`. (It is a transitive dependency, but importing it directly couples your
-app to storage internals and will break the day the store moves out of process.)
+```rust
+use apro_client::{AproStoreClient, AppInterface, EdgeRequest, HttpStoreClient, Mode, TypeId};
+```
+
+The whole vocabulary also stays reachable as `apro_client::apro_types::{...}` if you prefer to
+qualify it.
+
+**Do not depend on `apro-store` directly.** That is the server-side engine — it links SQLite
+and has no business in a product app. `apro-client` deliberately does not depend on it either;
+that separation is why the SDK is a small, fast build.
 
 ---
 
@@ -192,7 +200,7 @@ over HTTP or to an in-process store:
 Tell the platform what you publish and consume. Do this once at startup.
 
 ```rust
-use apro_store::{AppInterface, ConsumeDecl, Mode, TypeId};
+use apro_client::{AppInterface, ConsumeDecl, Mode, TypeId};
 
 store.declare_interface(&AppInterface {
     app: "burn-geometry-modeler".into(),
@@ -221,7 +229,7 @@ Declarations are also what the hub shows as your app's data contract, so keep th
 ## 6. Publishing
 
 ```rust
-use apro_store::Encoding;
+use apro_client::Encoding;
 
 // Simple form.
 let handle = store.push(
@@ -279,7 +287,7 @@ time if the bytes are unchanged.
 ## 7. Consuming
 
 ```rust
-use apro_store::Selector;
+use apro_client::Selector;
 
 // Latest revision.
 let payload = store.pull(&grain_type, "engine-A", Selector::Latest)?;
@@ -308,7 +316,7 @@ artifact the producer has never published. That is a valid state, not an error.
 You can also enumerate:
 
 ```rust
-use apro_store::ArtifactFilter;
+use apro_client::ArtifactFilter;
 
 let all = store.list_artifacts(&ArtifactFilter::default())?;              // hides demo data
 let mine = store.list_artifacts(&ArtifactFilter {
@@ -340,7 +348,7 @@ When your app uses another app's data, **register that as a dependency**. This i
 platform tell you, and tell the user, that something you relied on has changed.
 
 ```rust
-use apro_store::{EdgeRequest, Mode};
+use apro_client::{EdgeRequest, Mode};
 
 let edge = store.register_edge(&EdgeRequest {
     consumer_app: String::new(),      // server fills this in from your session
@@ -401,7 +409,7 @@ holds references.
 ### Checking whether you are out of date
 
 ```rust
-use apro_store::EdgeFilter;
+use apro_client::EdgeFilter;
 
 let mine = store.list_edges(&EdgeFilter {
     consumer_app: Some("hexadof".into()),
@@ -431,7 +439,7 @@ Never silently adopt a new revision into a result that has already been recorded
 ```rust
 // src-tauri/src/platform_data.rs
 use apro_client::{AproStoreClient, ClientError, HttpStoreClient};
-use apro_store::{AppInterface, ArtifactFilter, EdgeFilter, Encoding, Mode, Selector, TypeId};
+use apro_client::{AppInterface, ArtifactFilter, EdgeFilter, Encoding, Mode, Selector, TypeId};
 
 const APP_SLUG: &str = "burn-geometry-modeler";   // kebab-case, matches your product slug
 
