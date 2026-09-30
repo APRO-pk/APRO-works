@@ -11,6 +11,7 @@ import {
 } from "@tauri-apps/api/window";
 import { supabase } from "./lib/supabase";
 import { WorkflowsPanel } from "./sections/WorkflowsPanel";
+import { AmbientDefence } from "./components/AmbientDefence";
 import {
   ACCENTS,
   accentSwatch,
@@ -271,16 +272,20 @@ function LoginScreen({
   return (
     <div className="app-canvas relative flex h-screen items-center justify-center overflow-hidden px-6 text-ink">
       <div className="ambient-bloom" aria-hidden="true" />
+      <AmbientDefence className="absolute inset-0 h-full w-full" />
 
       <div className="relative z-10 w-full max-w-[380px]">
-        <div className="mb-6 flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-md border border-line bg-raised">
-            <img src={logo} alt="" className="h-5 w-auto object-contain" />
-          </div>
-          <div>
-            <p className="text-[13px] font-semibold leading-none text-ink">APRO Works</p>
-            <p className="mt-1 text-[11px] leading-none text-ink-faint">Engineering platform</p>
-          </div>
+        <div className="mb-7 flex flex-col items-center">
+          <img
+            src={logo}
+            alt=""
+            className="h-24 w-24 object-contain drop-shadow-[0_10px_30px_var(--color-accent-glow)]"
+          />
+          {/* Tracking adds a trailing space after the last letter, which pushes centred
+              text off-axis; the matching left margin puts it back. */}
+          <p className="ml-[0.34em] mt-4 text-[13px] font-semibold uppercase tracking-[0.34em] text-ink">
+            APRO Works
+          </p>
         </div>
 
         <div className="card p-5">
