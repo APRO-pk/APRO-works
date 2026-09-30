@@ -146,6 +146,13 @@ function contrast(a, b) {
  * Contrast is the one visual property that can be checked without seeing the screen, so
  * it is checked. Text below AA on its own background is a regression that review never
  * catches and users notice immediately.
+ *
+ * Two families are measured:
+ *
+ *   1. the ink levels against every surface they can sit on
+ *   2. `accent-ink` against every surface, and `on-accent` against *every accent preset*
+ *      — the second is what stops a newly added accent from shipping a button label that
+ *      cannot be read
  */
 function checkContrast(css) {
   const read = (name) => {
@@ -153,16 +160,45 @@ function checkContrast(css) {
     return match ? match[1] : null;
   };
 
+  /** Only hex literals are measurable here; derived color-mix values are resolved below. */
+  function resolve(name) {
+    const literal = read(name);
+    if (literal) return literal;
+
+    // `color-mix(in srgb, A p%, white|transparent)` — enough of the syntax for the
+    // derived tokens, without pulling in a full CSS colour parser.
+    const declaration = css.match(new RegExp(`--${name}:\\s*([^;]+);`));
+    if (!declaration) return null;
+    const mix = declaration[1].match(
+      /color-mix\(\s*in srgb,\s*var\(--([a-z-]+)\)\s*([\d.]+)%\s*,\s*([a-z]+)\s*\)/,
+    );
+    if (!mix) return null;
+
+    const base = resolve(mix[1]);
+    if (!base) return null;
+    const weight = Number(mix[2]) / 100;
+    const other = mix[3] === "white" ? "#ffffff" : null;
+    if (!other) return null; // mixing with `transparent` only lowers opacity
+
+    const channel = (hex, offset) => parseInt(hex.replace("#", "").slice(offset, offset + 2), 16);
+    const blend = [0, 2, 4].map((offset) =>
+      Math.round(channel(base, offset) * weight + channel(other, offset) * (1 - weight)),
+    );
+    return `#${blend.map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+  }
+
   const surfaces = ["canvas", "surface", "raised"].map((name) => ({
     name,
-    hex: read(`color-${name}`),
-  }));
-  const inks = ["ink", "ink-dim", "ink-faint"].map((name) => ({
-    name,
-    hex: read(`color-${name}`),
+    hex: resolve(`color-${name}`),
   }));
 
   const failures = [];
+
+  const inks = ["ink", "ink-dim", "ink-faint", "accent-ink"].map((name) => ({
+    name,
+    hex: resolve(`color-${name}`),
+  }));
+
   for (const surface of surfaces) {
     if (!surface.hex) {
       failures.push({ text: `--color-${surface.name} not found in index.css` });
@@ -176,13 +212,31 @@ function checkContrast(css) {
       const ratio = contrast(ink.hex, surface.hex);
       if (ratio < 4.5) {
         failures.push({
-          surface: surface.name,
           text: `${ink.name} on ${surface.name}: ${ratio.toFixed(2)}:1 (needs 4.5:1)`,
         });
       }
     }
   }
-  return failures;
+
+  // Every preset must be readable when it is the *background* of a primary button.
+  const onAccent = resolve("color-on-accent");
+  const presets = [...css.matchAll(/--color-accent-([a-z]+):\s*(#[0-9a-fA-F]{3,8})/g)];
+  if (!onAccent) {
+    failures.push({ text: "--color-on-accent not found in index.css" });
+  } else if (presets.length === 0) {
+    failures.push({ text: "no accent presets found in index.css" });
+  } else {
+    for (const [, name, hex] of presets) {
+      const ratio = contrast(onAccent, hex);
+      if (ratio < 4.5) {
+        failures.push({
+          text: `on-accent over the ${name} accent: ${ratio.toFixed(2)}:1 (needs 4.5:1)`,
+        });
+      }
+    }
+  }
+
+  return { failures, inkChecks: surfaces.length * inks.length, presets: presets.length };
 }
 
 const files = walk(SRC).filter((file) => file !== TOKEN_FILE);
@@ -215,12 +269,16 @@ for (const file of files) {
   }
 }
 
-const contrastFailures = checkContrast(readFileSync(TOKEN_FILE, "utf8"));
+const contrastResult = checkContrast(readFileSync(TOKEN_FILE, "utf8"));
+const contrastFailures = contrastResult.failures;
 
 if (problems.length === 0 && contrastFailures.length === 0) {
   console.log(`token conformance: ${files.length} files clean`);
   console.log("  no raw colours, no dead classes, no sub-10px type, no white/black utilities");
-  console.log("  ink levels clear WCAG AA (4.5:1) on canvas, surface and raised");
+  console.log(
+    `  contrast: ${contrastResult.inkChecks} ink/surface pairs and ` +
+      `${contrastResult.presets} accent presets clear WCAG AA (4.5:1)`,
+  );
   process.exit(0);
 }
 

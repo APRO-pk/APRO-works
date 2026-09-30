@@ -98,6 +98,15 @@ export function WorkflowsPanel({
   const [dataError, setDataError] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
+  /**
+   * Collapsed by default.
+   *
+   * The canvas is the point of this screen, and a 268px column of wire details next to
+   * it takes a third of the width before the user has asked for anything. The toggle
+   * carries the counts, so nothing is hidden that matters — a draft that needs applying
+   * shows on the button itself.
+   */
+  const [connectionsOpen, setConnectionsOpen] = useState(false);
 
   const appKey = apps.map((app) => `${app.slug}:${app.installed ? 1 : 0}`).join("|");
   const graphReady = graph !== null;
@@ -254,6 +263,48 @@ export function WorkflowsPanel({
         </div>
       ) : null}
 
+      <div className="flex shrink-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setConnectionsOpen((open) => !open)}
+          aria-expanded={connectionsOpen}
+          aria-controls="workflow-connections"
+          className="btn btn-ghost"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            className={`h-3.5 w-3.5 transition-transform duration-200 ${connectionsOpen ? "rotate-180" : ""}`}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+          Connections
+        </button>
+
+        <span className="pill">
+          {graph.wires.length} total
+        </span>
+
+        {/* A draft is un-applied work. Surfacing it here means collapsing the panel
+            cannot hide something the user still has to act on. */}
+        {drafts.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => setConnectionsOpen(true)}
+            className="pill pill-accent cursor-pointer"
+            title="There are wires drawn locally but not yet written to the store"
+          >
+            {drafts.length} draft — apply to save
+          </button>
+        ) : null}
+
+        <span className="ml-auto hidden text-[11px] text-ink-faint lg:block">
+          Drag a block onto the canvas, then wire its output to another block's input.
+        </span>
+      </div>
+
       <div className="flex min-h-0 flex-1 gap-3">
         {/* palette */}
         <aside className="card flex w-[182px] shrink-0 flex-col p-2.5">
@@ -295,49 +346,55 @@ export function WorkflowsPanel({
           />
         </div>
 
-        {/* connections */}
-        <aside className="card flex w-[268px] shrink-0 flex-col">
-          <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-            <span className="label">Connections</span>
-            <div className="ml-auto flex items-center gap-1.5">
-              {drafts.length > 0 ? (
-                <>
-                  {/* A count of un-applied wires is neither good nor bad: neutral. */}
-                  <span className="pill">{drafts.length} draft</span>
-                  <button
-                    type="button"
-                    onClick={() => void handleApply()}
-                    disabled={busy}
-                    className="btn btn-primary"
-                  >
-                    {busy ? "…" : "Apply"}
-                  </button>
-                </>
+        {/* connections — collapsed by default; the canvas takes the full width until
+            the user asks for this. */}
+        {connectionsOpen ? (
+          <aside
+            id="workflow-connections"
+            className="card slide-in-right flex w-[268px] shrink-0 flex-col"
+          >
+            <div className="flex items-center gap-2 border-b border-line px-3 py-2">
+              <span className="label">Connections</span>
+              <div className="ml-auto flex items-center gap-1.5">
+                {drafts.length > 0 ? (
+                  <>
+                    {/* A count of un-applied wires is neither good nor bad: neutral. */}
+                    <span className="pill">{drafts.length} draft</span>
+                    <button
+                      type="button"
+                      onClick={() => void handleApply()}
+                      disabled={busy}
+                      className="btn btn-primary glow-swipe"
+                    >
+                      {busy ? "…" : "Apply"}
+                    </button>
+                  </>
+                ) : (
+                  <span className="pill">saved</span>
+                )}
+              </div>
+            </div>
+            <div className="scroll min-h-0 flex-1 overflow-y-auto p-2.5">
+              {graph.wires.length === 0 ? (
+                <div className="px-1 py-4 text-[11px] text-ink-faint">No connections yet.</div>
               ) : (
-                <span className="pill">saved</span>
+                <ul className="flex flex-col gap-2">
+                  {graph.wires.map((wire) => (
+                    <ConnectionRow
+                      key={wire.id}
+                      wire={wire}
+                      fromName={nodeName(wire.fromNode)}
+                      toName={nodeName(wire.toNode)}
+                      edgeCount={subscriptionFor(wire)?.edge_count}
+                      onMode={(mode) => setGraph(setWireMode(graph, wire.id, mode))}
+                      onRemove={() => void handleRemove(wire)}
+                    />
+                  ))}
+                </ul>
               )}
             </div>
-          </div>
-          <div className="scroll min-h-0 flex-1 overflow-y-auto p-2.5">
-            {graph.wires.length === 0 ? (
-              <div className="px-1 py-4 text-[11px] text-ink-faint">No connections yet.</div>
-            ) : (
-              <ul className="flex flex-col gap-2">
-                {graph.wires.map((wire) => (
-                  <ConnectionRow
-                    key={wire.id}
-                    wire={wire}
-                    fromName={nodeName(wire.fromNode)}
-                    toName={nodeName(wire.toNode)}
-                    edgeCount={subscriptionFor(wire)?.edge_count}
-                    onMode={(mode) => setGraph(setWireMode(graph, wire.id, mode))}
-                    onRemove={() => void handleRemove(wire)}
-                  />
-                ))}
-              </ul>
-            )}
-          </div>
-        </aside>
+          </aside>
+        ) : null}
       </div>
 
       {toast ? (

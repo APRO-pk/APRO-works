@@ -11,6 +11,14 @@ import {
 } from "@tauri-apps/api/window";
 import { supabase } from "./lib/supabase";
 import { WorkflowsPanel } from "./sections/WorkflowsPanel";
+import {
+  ACCENTS,
+  accentSwatch,
+  applyAccent,
+  loadAccentId,
+  saveAccentId,
+  type AccentId,
+} from "./lib/theme";
 import logo from "../src-tauri/icons/icon.png";
 import geometryIcon from "./assets/icons/GeometryModeler.png";
 import hexadofIcon from "./assets/icons/HexadofForLight.png";
@@ -208,11 +216,11 @@ const stageLabels: Record<DownloadStage, string> = {
 const sectionCopy: Record<SectionId, { title: string; subtitle: string }> = {
   "all-apps": {
     title: "All Apps",
-    subtitle: "Every workspace APRO publishes. Install one to run it locally, or launch it straight from here.",
+    subtitle: "Everything APRO publishes, grouped by what you can do with it.",
   },
   "installed-apps": {
     title: "Installed",
-    subtitle: "Workspaces present on this machine. Launches are handed the store connection automatically.",
+    subtitle: "What is on this machine right now. Launches are handed the store connection automatically.",
   },
   workflows: {
     title: "Workflows",
@@ -610,6 +618,7 @@ function ProductCard({
   busy,
   onPrimaryAction,
   onSecondaryAction,
+  index,
 }: {
   product: ProductDefinition;
   installed: boolean;
@@ -617,13 +626,18 @@ function ProductCard({
   busy: boolean;
   onPrimaryAction: () => void;
   onSecondaryAction?: () => void;
+  /** Position in its grid, used only to stagger the entrance. */
+  index?: number;
 }) {
   // Only "an update is waiting" is actionable, so it is the only state that gets the
   // accent. Installed and available are just facts about this machine.
   const statusTone = updateAvailable ? "pill-accent" : "";
 
   return (
-    <article className="card card-interactive flex flex-col p-4">
+    <article
+      className="card card-interactive glow-swipe rise flex flex-col p-4"
+      style={{ animationDelay: `${(index ?? 0) * 45}ms` }}
+    >
       <div className="flex items-start gap-3">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-line bg-raised">
           {product.iconImage ? (
@@ -655,7 +669,7 @@ function ProductCard({
           type="button"
           onClick={onPrimaryAction}
           disabled={busy}
-          className={`btn ${installed && !updateAvailable ? "btn-primary" : "btn-quiet"} flex-1`}
+          className={`btn glow-swipe flex-1 ${installed && !updateAvailable ? "btn-primary" : "btn-quiet"}`}
         >
           {busy ? "Working…" : updateAvailable ? "Update" : installed ? "Launch" : "Install"}
         </button>
@@ -666,6 +680,128 @@ function ProductCard({
         ) : null}
       </div>
     </article>
+  );
+}
+
+/** A labelled heading inside a page, so one screen can hold several groups. */
+function SubSection({
+  title,
+  count,
+  detail,
+  actions,
+}: {
+  title: string;
+  count?: number;
+  detail?: string;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+      <div className="flex items-baseline gap-2.5">
+        <h2 className="text-[13px] font-semibold tracking-tight text-ink">{title}</h2>
+        {count !== undefined ? (
+          <span className="pill">{count}</span>
+        ) : null}
+        {detail ? <span className="text-[11px] text-ink-faint">{detail}</span> : null}
+      </div>
+      {actions}
+    </div>
+  );
+}
+
+/**
+ * One installed workspace.
+ *
+ * Deliberately not a `ProductCard`. The installed screen answers one question —
+ * "what can I run right now?" — so it is a list of launch affordances rather than a
+ * catalogue. Removing an app is a catalogue action and lives in All Apps, which keeps
+ * a destructive control off the screen a user opens to start working.
+ */
+function InstalledRow({
+  product,
+  updateAvailable,
+  busy,
+  onLaunch,
+  onUpdate,
+  index,
+}: {
+  product: ProductDefinition;
+  updateAvailable: boolean;
+  busy: boolean;
+  onLaunch: () => void;
+  onUpdate: () => void;
+  index: number;
+}) {
+  return (
+    <li
+      className="card rise flex items-center gap-3.5 px-4 py-3"
+      style={{ animationDelay: `${index * 45}ms` }}
+    >
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-line bg-raised">
+        {product.iconImage ? (
+          <img src={product.iconImage} alt="" className="h-6 w-6 object-contain" />
+        ) : (
+          <span className="text-[12px] font-semibold text-ink-dim">
+            {initialsFromName(product.name)}
+          </span>
+        )}
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-[13px] font-medium text-ink">{product.name}</span>
+          {updateAvailable ? <span className="pill pill-accent">Update ready</span> : null}
+        </div>
+        <p className="truncate text-[11px] text-ink-faint">{product.eyebrow}</p>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-2">
+        {updateAvailable ? (
+          <button type="button" onClick={onUpdate} disabled={busy} className="btn btn-quiet">
+            {busy ? "Updating…" : "Update"}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={onLaunch}
+          disabled={busy}
+          className="btn btn-primary glow-swipe min-w-[92px]"
+        >
+          {busy ? "Starting…" : "Launch"}
+        </button>
+      </div>
+    </li>
+  );
+}
+
+/**
+ * The external-apps placeholder.
+ *
+ * There are no external apps yet, so this states that rather than inventing
+ * plausible-looking ones to fill the grid. A card full of fictional products would
+ * be the single most misleading thing on the screen.
+ */
+function ExternalAppsCard() {
+  return (
+    <div className="card-dashed rise flex flex-col items-start gap-3 p-5 sm:col-span-2 lg:col-span-3">
+      <div className="flex items-center gap-2.5">
+        <span className="flex h-8 w-8 items-center justify-center rounded-md border border-line-strong text-ink-faint">
+          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.7">
+            <path d="M12 3v10m0 0 3.5-3.5M12 13 8.5 9.5" />
+            <path d="M4.5 16.5v2A2.5 2.5 0 0 0 7 21h10a2.5 2.5 0 0 0 2.5-2.5v-2" />
+          </svg>
+        </span>
+        <span className="pill pill-accent">Coming soon</span>
+      </div>
+      <div>
+        <h3 className="text-[13px] font-semibold tracking-tight text-ink">External apps</h3>
+        <p className="mt-1 max-w-[54ch] text-[12px] leading-5 text-ink-dim">
+          Third-party tools will be able to publish and consume through the same store, so
+          anything outside the APRO suite can take part in a workflow. Nothing is
+          available to install yet.
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -805,38 +941,75 @@ function DownloadsPanel({
 
 function SettingsPanel({
   member,
+  accentId,
+  onAccentChange,
   onSignOut,
   signingOut,
 }: {
   member: MemberRecord;
+  accentId: AccentId;
+  onAccentChange: (id: AccentId) => void;
   onSignOut: () => void;
   signingOut: boolean;
 }) {
   return (
     <section className="grid gap-3 xl:grid-cols-[1.3fr_0.7fr]">
-      <div className="card p-4">
-        <p className="label">Account</p>
-        <h3 className="mt-1.5 text-[15px] font-semibold tracking-tight text-ink">
-          {member.full_name ?? member.email ?? "APRO member"}
-        </h3>
-        <p className="mt-2 text-[12px] leading-5 text-ink-dim">
-          Manage your APRO Works account session.
-        </p>
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <span className="pill">{member.account_status}</span>
-          <span className="text-[11px] text-ink-faint">{member.email ?? "No email available"}</span>
+      <div className="flex flex-col gap-3">
+        <div className="card p-4">
+          <p className="label">Accent</p>
+          <p className="mt-1.5 max-w-[52ch] text-[12px] leading-5 text-ink-dim">
+            Applied immediately and remembered on this machine. Primary buttons, focus
+            rings, the ambient glow and the workflow wires all derive from this one value,
+            so nothing else needs setting.
+          </p>
+
+          <div className="mt-3.5 flex flex-wrap gap-2" role="radiogroup" aria-label="Accent colour">
+            {ACCENTS.map((accent) => {
+              const active = accent.id === accentId;
+              return (
+                <button
+                  key={accent.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => onAccentChange(accent.id)}
+                  className={`flex items-center gap-2 rounded-pill border px-2.5 py-1.5 text-[11px] font-medium transition ${
+                    active
+                      ? "border-line-strong bg-raised text-ink"
+                      : "border-line text-ink-dim hover:bg-raised hover:text-ink"
+                  }`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="h-3 w-3 rounded-full"
+                    style={{ background: accentSwatch(accent.id) }}
+                  />
+                  {accent.name}
+                </button>
+              );
+            })}
+          </div>
         </div>
-        <button
-          type="button"
-          onClick={onSignOut}
-          disabled={signingOut}
-          className="btn btn-ghost mt-5"
-        >
-          {signingOut ? "Signing out…" : "Sign Out"}
-        </button>
+
+        <div className="card p-4">
+          <p className="label">Account</p>
+          <h3 className="mt-1.5 text-[15px] font-semibold tracking-tight text-ink">
+            {member.full_name ?? member.email ?? "APRO member"}
+          </h3>
+          <p className="mt-2 text-[12px] leading-5 text-ink-dim">
+            Manage your APRO Works account session.
+          </p>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <span className="pill">{member.account_status}</span>
+            <span className="text-[11px] text-ink-faint">{member.email ?? "No email available"}</span>
+          </div>
+          <button type="button" onClick={onSignOut} disabled={signingOut} className="btn btn-ghost mt-5">
+            {signingOut ? "Signing out…" : "Sign Out"}
+          </button>
+        </div>
       </div>
 
-      <div className="grid gap-3">
+      <div className="flex flex-col gap-3">
         <div className="card p-3.5">
           <p className="label">Session</p>
           <p className="mt-1.5 text-[12px] leading-5 text-ink-dim">
@@ -864,6 +1037,7 @@ function App() {
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [signingOut, setSigningOut] = useState(false);
+  const [accentId, setAccentId] = useState<AccentId>(() => loadAccentId());
   const [activeSection, setActiveSection] = useState<SectionId>("all-apps");
   const [searchQuery, setSearchQuery] = useState("");
   const [productStatuses, setProductStatuses] = useState<Record<string, ProductStatus>>({});
@@ -1034,6 +1208,16 @@ function App() {
 
     void refreshProductStatuses();
   }, [member]);
+
+  // The accent is a single custom property; everything else derives from it in CSS.
+  useEffect(() => {
+    applyAccent(accentId);
+  }, [accentId]);
+
+  function handleAccentChange(id: AccentId) {
+    setAccentId(id);
+    saveAccentId(id);
+  }
 
   useEffect(() => {
     if (activeSection !== "downloads") {
@@ -1284,8 +1468,11 @@ function App() {
     `${product.name} ${product.description} ${product.eyebrow}`.toLowerCase().includes(normalizedSearchQuery);
 
   const installedProducts = products.filter((product) => productStatuses[product.slug]?.installed);
-  const filteredProducts = products.filter(matchesSearch);
+  const installableProducts = products.filter(
+    (product) => !productStatuses[product.slug]?.installed,
+  );
   const filteredInstalledProducts = installedProducts.filter(matchesSearch);
+  const filteredInstallableProducts = installableProducts.filter(matchesSearch);
   const availableProductsCount = products.length;
   const installedProductsCount = installedProducts.length;
   const showActiveDownload =
@@ -1297,14 +1484,18 @@ function App() {
   ).length;
 
   /**
-   * The dashboard figures.
+   * The dashboard figures, on the catalogue page only.
    *
    * Only `updatesWaiting` carries a tone, and only when it is non-zero: a pending
    * update is something the user has to act on, which amber honestly means. Installed
    * and available are plain facts and stay neutral — colouring them would imply that
    * more or fewer apps is better, which is not true.
+   *
+   * The Installed screen deliberately has no metric row. It is a launch list, and
+   * repeating the catalogue's summary at the top of it would make the two screens look
+   * like the same screen.
    */
-  const showMetrics = activeSection === "all-apps" || activeSection === "installed-apps";
+  const showMetrics = activeSection === "all-apps";
 
   const activeCopy = sectionCopy[activeSection];
 
@@ -1334,9 +1525,11 @@ function App() {
   }
 
   return (
-    <div className="app-canvas flex h-screen overflow-hidden text-ink">
-      {/* ---- rail: full height, one shade darker than the content ---------- */}
-      <aside className="rail flex w-[198px] shrink-0 flex-col">
+    <div className="app-canvas relative flex h-screen overflow-hidden text-ink">
+      <div className="ambient-bloom" aria-hidden="true" />
+
+      {/* ---- rail: full height, glass so the bloom reads through it -------- */}
+      <aside className="rail relative z-10 flex w-[198px] shrink-0 flex-col">
         <div className="flex h-12 shrink-0 items-center px-3">
           <AproLogo />
         </div>
@@ -1400,10 +1593,10 @@ function App() {
       </aside>
 
       {/* ---- content column ------------------------------------------------ */}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="relative z-10 flex min-w-0 flex-1 flex-col">
         <header
           onMouseDown={handleTitlebarMouseDown}
-          className="flex h-12 shrink-0 items-center gap-3 border-b border-line px-4"
+          className="glass flex h-12 shrink-0 items-center gap-3 border-x-0 border-t-0 px-4"
         >
           <p className="shrink-0 text-[12px] text-ink-faint">
             <span className="text-ink-dim">APRO Works</span>
@@ -1428,7 +1621,7 @@ function App() {
         </header>
 
         <main className="min-h-0 flex-1 overflow-y-auto scroll">
-          <div className="mx-auto flex max-w-[1180px] flex-col gap-4 px-5 py-5">
+          <div className="flex w-full flex-col gap-5 px-6 py-5">
             <SectionHeader
               title={activeCopy.title}
               subtitle={activeCopy.subtitle}
@@ -1470,7 +1663,7 @@ function App() {
             {showMetrics ? (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <HeroMetric
-                  className="lg:col-span-2"
+                  className="rise lg:col-span-2"
                   label="Workspaces available"
                   value={availableProductsCount}
                   parts={[
@@ -1478,8 +1671,9 @@ function App() {
                     { label: "Updates", value: updatesWaiting },
                   ]}
                 />
-                <Metric label="Installed on this machine" value={installedProductsCount} />
+                <Metric className="rise" label="Installed on this machine" value={installedProductsCount} />
                 <Metric
+                  className="rise"
                   label="Updates waiting"
                   value={updatesWaiting}
                   hint={updatesWaiting > 0 ? "action needed" : "up to date"}
@@ -1490,40 +1684,18 @@ function App() {
 
             {activeSection === "all-apps" && (
               <>
-                {filteredProducts.length > 0 ? (
-                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-3">
-                    {filteredProducts.map((product) => (
-                      <ProductCard
-                        key={product.slug}
-                        product={product}
-                        installed={Boolean(productStatuses[product.slug]?.installed)}
-                        updateAvailable={Boolean(productStatuses[product.slug]?.update_available)}
-                        busy={busy && activeProductSlug === product.slug}
-                        onPrimaryAction={() => void handleProductAction(product)}
-                        onSecondaryAction={
-                          productStatuses[product.slug]?.installed
-                            ? () => void handleUninstallProduct(product)
-                            : undefined
-                        }
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <EmptyState
-                    title="No products found"
-                    detail="Try a different search term or clear the current filter."
-                  />
-                )}
-              </>
-            )}
-
-            {activeSection === "installed-apps" && (
-              <>
+                {/* ---- Manage: what is already on this machine ------------ */}
+                <SubSection
+                  title="Manage apps"
+                  count={filteredInstalledProducts.length}
+                  detail="installed on this machine"
+                />
                 {filteredInstalledProducts.length > 0 ? (
-                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-3">
-                    {filteredInstalledProducts.map((product) => (
+                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
+                    {filteredInstalledProducts.map((product, index) => (
                       <ProductCard
                         key={product.slug}
+                        index={index}
                         product={product}
                         installed
                         updateAvailable={Boolean(productStatuses[product.slug]?.update_available)}
@@ -1533,6 +1705,85 @@ function App() {
                       />
                     ))}
                   </div>
+                ) : (
+                  <EmptyState
+                    title={
+                      installedProducts.length > 0 ? "No match" : "Nothing installed yet"
+                    }
+                    detail={
+                      installedProducts.length > 0
+                        ? "The current filter does not match any installed workspace."
+                        : "Install one from Installable apps below and it will appear here, with a Remove control."
+                    }
+                  />
+                )}
+
+                {/* ---- Installable: what could be added ------------------- */}
+                <SubSection
+                  title="Installable apps"
+                  count={filteredInstallableProducts.length}
+                  detail="published by APRO"
+                />
+                {filteredInstallableProducts.length > 0 ? (
+                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
+                    {filteredInstallableProducts.map((product, index) => (
+                      <ProductCard
+                        key={product.slug}
+                        index={index}
+                        product={product}
+                        installed={false}
+                        updateAvailable={false}
+                        busy={busy && activeProductSlug === product.slug}
+                        onPrimaryAction={() => void handleProductAction(product)}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState
+                    title={installedProducts.length > 0 ? "Everything is installed" : "No match"}
+                    detail={
+                      installedProducts.length > 0
+                        ? "Every published workspace is already on this machine."
+                        : "Try a different search term or clear the current filter."
+                    }
+                  />
+                )}
+
+                {/* ---- External: not available yet ----------------------- */}
+                <SubSection title="External apps" detail="third-party, not yet available" />
+                <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
+                  <ExternalAppsCard />
+                </div>
+              </>
+            )}
+
+            {activeSection === "installed-apps" && (
+              <>
+                {filteredInstalledProducts.length > 0 ? (
+                  <>
+                    <SubSection
+                      title="Ready to launch"
+                      count={filteredInstalledProducts.length}
+                      detail={
+                        updatesWaiting > 0
+                          ? `${updatesWaiting} update${updatesWaiting === 1 ? "" : "s"} available`
+                          : "all up to date"
+                      }
+                    />
+                    <ul className="flex flex-col gap-2">
+                      {filteredInstalledProducts.map((product, index) => (
+                        <InstalledRow
+                          key={product.slug}
+                          index={index}
+                          product={product}
+                          updateAvailable={Boolean(productStatuses[product.slug]?.update_available)}
+                          busy={busy && activeProductSlug === product.slug}
+                          onLaunch={() => void handleProductAction(product)}
+                          onUpdate={() => void handleProductAction(product)}
+                        />
+                      ))}
+                    </ul>
+                  </>
                 ) : installedProducts.length > 0 ? (
                   <EmptyState
                     title="No products found"
@@ -1541,7 +1792,7 @@ function App() {
                 ) : (
                   <EmptyState
                     title="Nothing installed yet"
-                    detail="Install a workspace from All Apps and it will appear here, ready to launch."
+                    detail="Open All Apps, install a workspace, and it will appear here ready to launch."
                   />
                 )}
               </>
@@ -1581,6 +1832,8 @@ function App() {
             {activeSection === "settings" && (
               <SettingsPanel
                 member={member}
+                accentId={accentId}
+                onAccentChange={handleAccentChange}
                 onSignOut={() => void handleSignOut()}
                 signingOut={signingOut}
               />

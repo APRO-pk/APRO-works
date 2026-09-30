@@ -43,11 +43,40 @@
   --color-ink-faint: #7b8391;
 
   /* ---- the single accent ----------------------------------------------
-     One accent for the whole application. It marks the primary action and
-     the active state, and nothing else. Change this line to re-brand. */
-  --color-accent: #ff6b1a;
-  --color-accent-hover: #ff8340;
-  --color-accent-soft: #ff6b1a1f;
+     One accent for the whole application. It marks the primary action, the
+     active state and focus, and nothing else.
+
+     `--color-accent-hover` and `--color-accent-soft` are *derived* with
+     color-mix rather than written out, so switching accent is exactly one
+     value. With a second hardcoded shade, every new accent would need three
+     edits and one of them would eventually be forgotten.
+
+     The palette below exists so the Settings picker can offer choices without
+     the choice values living in TypeScript — `verify:tokens` would reject a
+     hex literal in a .ts file, and it would be right to. */
+  --color-accent: #8b5cf6;
+  --color-accent-hover: color-mix(in srgb, var(--color-accent) 78%, white);
+  --color-accent-soft: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  --color-accent-glow: color-mix(in srgb, var(--color-accent) 42%, transparent);
+
+  /* Accent used as *text*.
+     A saturated accent rarely clears 4.5:1 on a near-black surface — the shipped
+     violet lands at exactly 4.5:1, which passes by a hair and would fail for
+     several of the presets below. Text gets a lightened tint; fills keep the
+     full-saturation value. Both are derived, so a new accent needs one line. */
+  --color-accent-ink: color-mix(in srgb, var(--color-accent) 70%, white);
+
+  /* Ink that sits *on top of* a filled accent surface. Black rather than
+     near-black so even the darkest preset (indigo) clears AA at button size. */
+  --color-on-accent: #000000;
+
+  --color-accent-violet: #8b5cf6;
+  --color-accent-indigo: #6366f1;
+  --color-accent-cyan: #22d3ee;
+  --color-accent-emerald: #10b981;
+  --color-accent-amber: #f59e0b;
+  --color-accent-rose: #f43f5e;
+  --color-accent-graphite: #94a3b8;
 
   /* ---- status: semantic, never decorative ------------------------------
      These mean "better" and "worse", so they may only be used where that is
@@ -113,26 +142,111 @@ input::placeholder {
 @layer components {
   /* ---- structure ------------------------------------------------------- */
 
-  /* The window's ambient glow. Vaulto's depth comes from one soft radial at
-     the top rather than from per-panel gradients. */
+  /* The window's ambient glow. Depth comes from one soft accent-tinted radial
+     at the top rather than from per-panel gradients — those stack up and read
+     as heavy. It drifts very slowly, which is enough to keep the surface from
+     looking like a flat JPEG without ever pulling the eye. */
   .app-canvas {
     background:
-      radial-gradient(120% 62% at 50% -12%, #1c2029 0%, #0d0f13 46%, var(--color-canvas) 100%);
+      radial-gradient(
+        120% 58% at 50% -14%,
+        color-mix(in srgb, var(--color-accent) 16%, #191c24) 0%,
+        #101217 46%,
+        var(--color-canvas) 100%
+      );
+  }
+
+  /* A second, moving bloom, rendered as its own element rather than a
+     pseudo-element so it cannot end up painting over content. Purely
+     decorative: no pointer events, no layout, `aria-hidden` in the markup. */
+  .ambient-bloom {
+    position: fixed;
+    left: -10%;
+    right: -10%;
+    top: -28%;
+    height: 62%;
+    z-index: 0;
+    pointer-events: none;
+    background: radial-gradient(
+      46% 60% at 50% 50%,
+      var(--color-accent-glow),
+      transparent 72%
+    );
+    opacity: 0.42;
+    filter: blur(70px);
+    animation: bloom-drift 26s ease-in-out infinite;
   }
 
   .card {
     background: var(--color-surface);
     border: 1px solid var(--color-line);
     border-radius: var(--radius-lg);
+    transition:
+      background-color 200ms ease,
+      border-color 200ms ease,
+      transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      box-shadow 200ms ease;
   }
 
-  .card-interactive {
-    transition: background-color 160ms ease, border-color 160ms ease;
+  /* Glass: translucent enough to pick up the bloom behind it, with a hairline
+     highlight along the top edge. Reserved for surfaces that sit *over*
+     content — bars, popovers, scrims — because blurring a whole page of cards
+     is expensive and reads as mush. */
+  .glass {
+    background: color-mix(in srgb, var(--color-surface) 72%, transparent);
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    border: 1px solid var(--color-line);
+    position: relative;
+  }
+
+  .glass::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--color-ink) 22%, transparent),
+      transparent
+    );
+    pointer-events: none;
   }
 
   .card-interactive:hover {
     background: var(--color-raised);
     border-color: var(--color-line-strong);
+    transform: translateY(-2px);
+    box-shadow: 0 12px 32px -12px color-mix(in srgb, var(--color-accent) 30%, transparent);
+  }
+
+  /* The glow swipe. A sheen travels across the surface once, on hover, from a
+     ::after layer so it never affects layout or text contrast. */
+  .glow-swipe {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+  }
+
+  .glow-swipe::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    background: linear-gradient(
+      105deg,
+      transparent 40%,
+      color-mix(in srgb, var(--color-ink) 18%, transparent) 50%,
+      transparent 60%
+    );
+    transform: translateX(-130%);
+    opacity: 0;
+  }
+
+  .glow-swipe:hover::after {
+    animation: glow-swipe 900ms cubic-bezier(0.3, 0, 0.2, 1);
   }
 
   /* A dashed card is the "nothing here yet, add one" affordance. Used in
@@ -150,8 +264,10 @@ input::placeholder {
   }
 
   .rail {
-    /* The sidebar sits a shade darker than the content it frames. */
-    background: var(--color-canvas);
+    /* The sidebar is glass so the ambient bloom reads through it. */
+    background: color-mix(in srgb, var(--color-canvas) 82%, transparent);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
     border-right: 1px solid var(--color-line);
   }
 
@@ -224,13 +340,20 @@ input::placeholder {
 
   .btn-primary {
     background: var(--color-accent);
-    color: #100a05;
+    color: var(--color-on-accent);
     border-color: var(--color-accent);
+    box-shadow: 0 8px 22px -10px var(--color-accent-glow);
   }
 
   .btn-primary:hover:not(:disabled) {
     background: var(--color-accent-hover);
     border-color: var(--color-accent-hover);
+    box-shadow: 0 10px 26px -10px var(--color-accent-glow);
+  }
+
+  /* Primary actions carry the swipe, because a sheen on everything is noise. */
+  .btn-primary.glow-swipe {
+    overflow: hidden;
   }
 
   .btn-ghost {
@@ -296,6 +419,21 @@ input::placeholder {
   .field:focus-within,
   .field:focus {
     border-color: var(--color-line-strong);
+    box-shadow: 0 0 0 3px var(--color-accent-soft);
+  }
+
+  /* ---- entrance --------------------------------------------------------
+     One rise-in, staggered by the caller with an inline `animationDelay`.
+     Short and small: a long travel on a dense screen is tiring, and the point
+     is to make a section change feel like it arrived rather than blinked. */
+  .rise {
+    animation: rise-in 340ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  /* A side panel arriving from the edge it lives on. Translating on X rather than Y is
+     what makes it read as the canvas widening rather than the page shifting. */
+  .slide-in-right {
+    animation: slide-in-right 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
   }
 
   /* ---- navigation ------------------------------------------------------ */
@@ -325,7 +463,7 @@ input::placeholder {
   }
 
   .nav-item-active .nav-glyph {
-    color: var(--color-accent);
+    color: var(--color-accent-ink);
   }
 
   .nav-glyph {
@@ -370,7 +508,7 @@ input::placeholder {
   }
 
   .pill-accent {
-    color: var(--color-accent);
+    color: var(--color-accent-ink);
     border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
     background: var(--color-accent-soft);
   }
@@ -482,5 +620,95 @@ input::placeholder {
      override the rule here. */
   .react-flow__attribution a {
     color: var(--color-ink-faint);
+  }
+}
+
+/* ============================================================================
+   Motion
+   ========================================================================= */
+
+@keyframes bloom-drift {
+  0%,
+  100% {
+    transform: translate3d(-6%, 0, 0) scale(1);
+    opacity: 0.38;
+  }
+  50% {
+    transform: translate3d(6%, 4%, 0) scale(1.12);
+    opacity: 0.52;
+  }
+}
+
+@keyframes glow-swipe {
+  0% {
+    transform: translateX(-130%);
+    opacity: 0;
+  }
+  22% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(130%);
+    opacity: 0;
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/**
+ * Honour the OS setting.
+ *
+ * Nothing here is load-bearing — every animation is decoration — so the correct
+ * response to "reduce motion" is to remove it rather than to shorten it. The
+ * hover *states* stay, because those are feedback, not motion.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .card-interactive:hover {
+    transform: none;
+  }
+
+  .ambient-bloom {
+    animation: none;
+  }
+
+  .rise {
+    animation: none;
+  }
+
+  .slide-in-right {
+    animation: none;
+  }
+
+  .glow-swipe:hover::after {
+    animation: none;
   }
 }
