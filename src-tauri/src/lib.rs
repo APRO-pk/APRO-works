@@ -854,6 +854,27 @@ pub fn run() {
                 eprintln!("APRO store failed to start: {error}");
             }
             app.manage(host);
+
+            // The window is created hidden (`tauri.conf.json` -> `visible: false`) so the
+            // first frame paints before it appears; the interface reveals it once React
+            // has mounted. That is the normal path and it stays flash-free.
+            //
+            // This is the fallback for when the interface never runs at all — missing
+            // build-time credentials, a JavaScript error, no WebView2 runtime. In those
+            // cases nothing would ever reveal the window, so the app would present as no
+            // window and no error, which is indistinguishable from a crash and
+            // impossible to diagnose on a machine without devtools. A short grace period
+            // is long enough for the frontend to win the race in the normal case.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(2500));
+                if let Some(window) = handle.get_webview_window("main") {
+                    if !window.is_visible().unwrap_or(false) {
+                        let _ = window.show();
+                    }
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

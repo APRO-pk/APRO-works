@@ -67,7 +67,18 @@ jobs:
       # `beforeBuildCommand` (which produces `dist/`) and passes the `custom-protocol`
       # feature, so the binary loads the bundled frontend instead of pointing at the
       # dev server. Without that a release build shows "localhost refused to connect".
+      # The Supabase credentials are inlined into the bundle at build time, so they must
+      # be present *here* — supplying them later is impossible. Without them the build
+      # still succeeds and then the app fails to mount, which previously meant a window
+      # that was never revealed and an installer that looked fine.
+      #
+      # Repo variables rather than secrets: a publishable key is designed to ship inside
+      # the client, so hiding it buys nothing and only makes the failure harder to see.
+      # Set them under Settings -> Secrets and variables -> Actions -> Variables.
       - name: Build the hub
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
         run: npm run tauri build
 
       - name: Locate the build output

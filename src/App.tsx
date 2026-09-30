@@ -8,7 +8,7 @@ import {
   currentMonitor,
   getCurrentWindow,
 } from "@tauri-apps/api/window";
-import { supabase } from "./lib/supabase";
+import { supabase, supabaseConfigError } from "./lib/supabase";
 import { WorkflowsPanel } from "./sections/WorkflowsPanel";
 import { AmbientDefence } from "./components/AmbientDefence";
 import {
@@ -260,6 +260,43 @@ function initialsFromName(name: string) {
   return parts.map((part) => part[0]?.toUpperCase() ?? "").join("");
 }
 
+/**
+ * Shown when the build carries no Supabase credentials.
+ *
+ * The interface is the only thing that can report this. The window is created hidden, so
+ * a failure that stops React from mounting is a failure nobody can see; reading the
+ * configuration as data instead of throwing during import is what makes this screen
+ * reachable at all.
+ *
+ * The values cannot be supplied at runtime — Vite inlines them into the bundle at build
+ * time — so the only remedy is a rebuild.
+ */
+function ConfigErrorScreen({ detail }: { detail: string }) {
+  return (
+    <div
+      data-tauri-drag-region="deep"
+      className="app-canvas relative flex h-screen items-center justify-center overflow-hidden px-6 text-ink"
+    >
+      <div className="ambient-bloom" aria-hidden="true" />
+
+      <div className="absolute right-3 top-3 z-20">
+        <WindowControls />
+      </div>
+
+      <div className="relative z-10 w-full max-w-[520px]">
+        <div className="card p-5">
+          <h1 className="text-[17px] font-semibold tracking-tight text-ink">Not configured</h1>
+          <p className="mt-3 text-[12.5px] leading-5 text-ink-dim">{detail}</p>
+          <p className="mt-3 text-[12px] leading-5 text-ink-faint">
+            Copy <span className="mono text-ink-dim">.env.example</span> to{" "}
+            <span className="mono text-ink-dim">.env</span> and fill it in, then rebuild.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LoginScreen({
   email,
   password,
@@ -292,6 +329,13 @@ function LoginScreen({
     >
       <div className="ambient-bloom" aria-hidden="true" />
       <AmbientDefence className="absolute inset-0 h-full w-full" />
+
+      {/* The window has no decorations, so the chrome has to be supplied here as well.
+          Without it the sign-in screen — the first thing anyone sees — cannot be closed
+          or minimised, leaving Alt+F4 as the only way out. */}
+      <div className="absolute right-3 top-3 z-20">
+        <WindowControls />
+      </div>
 
       <div className="relative z-10 w-full max-w-[380px]">
         <div className="mb-7 flex flex-col items-center">
@@ -1214,6 +1258,28 @@ function App() {
     detail: "",
   });
 
+  /**
+   * Reveal the window once the interface is mounted.
+   *
+   * The window is created hidden (`tauri.conf.json` → `visible: false`) so the first
+   * frame paints before it appears, rather than flashing white over the desktop.
+   *
+   * This deliberately does NOT live in `WindowControls`. That component only renders
+   * inside the signed-in shell, so showing the window from there leaves a fresh profile
+   * — empty session, therefore the login screen — with a window that is never revealed
+   * at all. The user cannot see the login screen they would have to sign in from, and
+   * nothing reports the failure, because every window call swallows its error.
+   */
+  useEffect(() => {
+    void (async () => {
+      try {
+        await getCurrentWindow().show();
+      } catch {
+        // Browser preview: there is no Tauri window to reveal.
+      }
+    })();
+  }, []);
+
   const activeProduct = products.find((product) => product.slug === activeProductSlug) ?? null;
   const profileName = member?.full_name?.trim() || authSession?.user?.email || "APRO member";
   const profileSubtitle = member?.member_type ? `${member.member_type} member` : "Approved member";
@@ -1280,6 +1346,13 @@ function App() {
     let mounted = true;
 
     async function initializeAuth() {
+      // Nothing to restore and nobody to sign in as: this build shows the configuration
+      // screen, so do not spend a request on the placeholder client.
+      if (supabaseConfigError) {
+        setAuthReady(true);
+        return;
+      }
+
       try {
         const { data } = await supabase.auth.getSession();
         if (!mounted) {
@@ -1666,9 +1739,19 @@ function App() {
 
   const activeCopy = sectionCopy[activeSection];
 
+  if (supabaseConfigError) {
+    return <ConfigErrorScreen detail={supabaseConfigError} />;
+  }
+
   if (!authReady) {
     return (
-      <div className="app-canvas flex h-screen items-center justify-center text-ink">
+      <div
+        data-tauri-drag-region="deep"
+        className="app-canvas relative flex h-screen items-center justify-center text-ink"
+      >
+        <div className="absolute right-3 top-3 z-20">
+          <WindowControls />
+        </div>
         <div className="text-center">
           <div className="mx-auto h-5 w-5 animate-spin rounded-full border-2 border-line-strong border-t-accent" />
           <p className="mt-4 text-[12px] text-ink-dim">Restoring session…</p>

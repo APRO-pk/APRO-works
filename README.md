@@ -35,6 +35,27 @@ extracted into its own process later without a rewrite.
 
 ## Quick start
 
+### Configuration (required)
+
+The hub authenticates against Supabase, and Vite **inlines the credentials at build
+time**. They cannot be supplied at runtime, and a build compiled without them cannot sign
+anyone in.
+
+```powershell
+Copy-Item .env.example .env
+# then fill in VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY
+```
+
+The release workflow reads the same two values from repository variables
+(`vars.VITE_SUPABASE_URL`, `vars.VITE_SUPABASE_PUBLISHABLE_KEY`). Without them a tagged
+release builds cleanly and then ships an installer that cannot sign in.
+
+If the credentials are missing the app now says so on screen. It previously threw during
+import, which took the whole module graph down before React could mount — and because the
+window is created hidden and revealed only by the interface, the result was no window and
+no error at all. `run()` in `src-tauri/src/lib.rs` reveals the window on a timer as a
+second line of defence, so a frontend that never starts is visible rather than silent.
+
 ```powershell
 # Install frontend deps and run the hub
 npm install
