@@ -1618,7 +1618,9 @@ function App() {
         setUpdate(fresh);
         setUpdateCheckedAt(saveCachedUpdate(fresh).at);
       } catch {
-        // Offline, rate-limited, or no releases yet. Nothing to say.
+        // Offline, or no releases yet. Nothing to say. Rate limiting no longer
+        // reaches here: the check answers from GitHub's redirect, which is not
+        // subject to the API's hourly budget.
       }
     })();
 
