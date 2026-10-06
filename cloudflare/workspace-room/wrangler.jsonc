@@ -1,0 +1,47 @@
+{
+  // One Worker, one Durable Object class. `name` determines the deployed host:
+  // https://apro-workspace-room.<account-subdomain>.workers.dev
+  // The desktop app reads that origin from VITE_WORKSPACE_LIVE_URL in .env.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "apro-workspace-room",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+
+  // Pinned rather than inferred from whoever happens to be logged in, so a
+  // deploy from another machine cannot land in the wrong account.
+  "account_id": "f1749453324fa5f860c33c63fc3a422e",
+
+  // No custom domain yet. workers.dev is enough for a WebSocket fan-out and
+  // keeps the deployment to one command.
+  "workers_dev": true,
+
+  // Preview URLs would give every future deploy a second public hostname that is
+  // not the one `VITE_WORKSPACE_LIVE_URL` names. The room authenticates either
+  // way, but an endpoint nobody chose and nobody watches is a cost with no
+  // benefit here — this worker has exactly one audience, the desktop app.
+  "preview_urls": false,
+
+  "durable_objects": {
+    "bindings": [{ "name": "WORKSPACE_ROOM", "class_name": "WorkspaceRoom" }]
+  },
+
+  // Every workspace id maps to one object via `idFromName`, so nothing needs a
+  // migration per workspace. `new_sqlite_classes` is used even though the object
+  // declares no storage: it is the backend that is available on both the free
+  // and paid plans, and a room that later wants to persist something should not
+  // need a storage migration to do it.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WorkspaceRoom"] }],
+
+  "vars": {
+    // Public project URL. Not a secret — it is already in the desktop app's .env.
+    "SUPABASE_URL": "https://zljhwosvsdqvgcgusqct.supabase.co"
+  },
+
+  // SUPABASE_ANON_KEY is NOT here. It is a Worker secret:
+  //   npx wrangler secret put SUPABASE_ANON_KEY
+  // It is technically the same publishable value the app ships, but keeping it
+  // out of the repository means the config stays reviewable without wondering
+  // which of its strings are load-bearing.
+
+  "observability": { "enabled": true }
+}

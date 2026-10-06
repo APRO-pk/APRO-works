@@ -10,7 +10,9 @@ import {
 } from "@tauri-apps/api/window";
 import { supabase, supabaseConfigError } from "./lib/supabase";
 import { WorkflowsPanel } from "./sections/WorkflowsPanel";
+import { WorkspacesPanel } from "./sections/WorkspacesPanel";
 import { AmbientDefence } from "./components/AmbientDefence";
+import { useWorkspaceDirectory } from "./lib/use-workspaces";
 import {
   ACCENTS,
   accentSwatch,
@@ -38,7 +40,13 @@ import geometryIcon from "./assets/icons/GeometryModeler.png";
 import hexadofIcon from "./assets/icons/HexadofForLight.png";
 import propulsorIcon from "./assets/icons/PropulsorForLight.png";
 
-type SectionId = "installed-apps" | "all-apps" | "workflows" | "downloads" | "settings";
+type SectionId =
+  | "installed-apps"
+  | "all-apps"
+  | "workflows"
+  | "workspaces"
+  | "downloads"
+  | "settings";
 type DownloadStage =
   | "idle"
   | "checking"
@@ -213,6 +221,17 @@ const navItems: NavItem[] = [
     ),
   },
   {
+    id: "workspaces",
+    label: "Workspaces",
+    group: "Orchestration",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.7">
+        <path d="M3 8.5 12 4l9 4.5-9 4.5-9-4.5Z" />
+        <path d="M6.5 11v4.6c0 1.4 2.5 2.4 5.5 2.4s5.5-1 5.5-2.4V11" />
+      </svg>
+    ),
+  },
+  {
     id: "downloads",
     label: "Downloads",
     group: "Activity",
@@ -226,6 +245,26 @@ const navItems: NavItem[] = [
 
 /** Section headings in the rail, in order. */
 const NAV_GROUPS = ["General", "Orchestration", "Activity"] as const;
+
+/**
+ * How many workspaces the rail lists before it stops and offers "More".
+ *
+ * A rail is a signpost, not a directory: past a handful of names it stops being
+ * scannable and starts pushing the sections below it off screen. The homescreen
+ * is where the full list belongs, and "More" goes there.
+ */
+const WORKSPACE_RAIL_LIMIT = 5;
+
+/** The bullet in front of a workspace name in the rail. */
+function RailBullet() {
+  return (
+    <span className="nav-glyph">
+      <svg viewBox="0 0 8 8" className="h-1.5 w-1.5" aria-hidden="true">
+        <circle cx="4" cy="4" r="3" fill="currentColor" />
+      </svg>
+    </span>
+  );
+}
 
 const stageLabels: Record<DownloadStage, string> = {
   idle: "Idle",
@@ -242,13 +281,14 @@ const stageLabels: Record<DownloadStage, string> = {
  * Page titles.
  *
  * Titles only. Every screen here used to carry a second line restating what the
- * screen obviously was — "workspaces present on this machine" under a heading called
+ * screen obviously was — "apps present on this machine" under a heading called
  * Installed. That is text the user has already read by the time they arrive.
  */
 const sectionCopy: Record<SectionId, { title: string }> = {
   "all-apps": { title: "All Apps" },
   "installed-apps": { title: "Installed" },
   workflows: { title: "Workflows" },
+  workspaces: { title: "Workspaces" },
   downloads: { title: "Downloads" },
   settings: { title: "Settings" },
 };
@@ -665,7 +705,7 @@ function MetricBar({
       key: "available",
       value: available,
       tone: "text-ink-dim",
-      explain: "Workspaces APRO publishes and this hub knows how to install.",
+      explain: "Apps APRO publishes and this hub knows how to install.",
       icon: (
         <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
           <path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3Z" />
@@ -677,7 +717,7 @@ function MetricBar({
       key: "installed",
       value: installed,
       tone: "text-ink-dim",
-      explain: "Workspaces already present on this machine, ready to launch.",
+      explain: "Apps already present on this machine, ready to launch.",
       icon: (
         <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
           <path d="M5 12.5 9.5 17 19 7" />
@@ -1349,6 +1389,16 @@ function App() {
   const [workflowSync, setWorkflowSync] = useState(0);
   const [workflowReset, setWorkflowReset] = useState(0);
   const [workflowConsole, setWorkflowConsole] = useState(false);
+  /**
+   * Workspaces.
+   *
+   * The directory is loaded here rather than inside the panel because the rail
+   * lists the workspaces too, and two loaders would let the sidebar disagree
+   * with the cards beside it. `activeWorkspaceId` lives here for the same
+   * reason: the rail's hierarchy navigates it.
+   */
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+  const workspaceDirectory = useWorkspaceDirectory();
   const [snackbar, setSnackbar] = useState<SnackbarState>({
     visible: false,
     title: "",
@@ -1756,6 +1806,54 @@ function App() {
     }));
   }
 
+  /**
+   * Launch an installed app on behalf of a workspace.
+   *
+   * Deliberately not `handleProductAction`: that one routes through the
+   * Downloads panel and may have to download first, and a click inside a
+   * workspace that swapped the whole section out from under a collaborator
+   * would be disorienting. A workspace only offers apps that are already
+   * installed, so this is the launch half on its own.
+   *
+   * Failure is a snackbar rather than a thrown error: the presence announcement
+   * has already been made by the caller, and the other person seeing "Prem is
+   * using this application" while Prem's launch failed is a state worth
+   * reporting, not one worth unwinding.
+   */
+  async function launchWorkspaceApp(slug: string) {
+    const product = products.find((candidate) => candidate.slug === slug);
+    if (!product) {
+      setSnackbar({
+        visible: true,
+        title: "Unknown application",
+        detail: "This workspace references an application this build does not know about.",
+      });
+      return;
+    }
+
+    try {
+      setLaunchOverlayProduct(product.name);
+      await invoke("launch_product", {
+        slug: product.slug,
+        exePath: product.executablePath,
+      });
+      await new Promise((resolve) => window.setTimeout(resolve, 900));
+      setSnackbar({
+        visible: true,
+        title: `${product.name} launched`,
+        detail: "Everyone else in the workspace can see that you are in it.",
+      });
+    } catch (failure) {
+      setSnackbar({
+        visible: true,
+        title: `Could not launch ${product.name}`,
+        detail: failure instanceof Error ? failure.message : String(failure),
+      });
+    } finally {
+      setLaunchOverlayProduct(null);
+    }
+  }
+
   async function handleProductAction(product: ProductDefinition) {
     const currentStatus = productStatuses[product.slug];
     setActiveSection("downloads");
@@ -1996,16 +2094,83 @@ function App() {
                 <div className="grid gap-0.5">
                   {items.map((item) => {
                     const isActive = item.id === activeSection;
+                    const railWorkspaces = workspaceDirectory.workspaces;
+
                     return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => setActiveSection(item.id)}
-                        className={`nav-item ${isActive ? "nav-item-active" : ""}`}
-                      >
-                        <span className="nav-glyph">{item.icon}</span>
-                        <span className="truncate">{item.label}</span>
-                      </button>
+                      <div key={item.id}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveSection(item.id);
+                            // The section itself is the homescreen; opening it
+                            // should not leave a workspace from last time open.
+                            if (item.id === "workspaces") setActiveWorkspaceId(null);
+                          }}
+                          className={`nav-item ${isActive ? "nav-item-active" : ""}`}
+                        >
+                          <span className="nav-glyph">{item.icon}</span>
+                          <span className="truncate">{item.label}</span>
+                        </button>
+
+                        {/* The workspaces, as a hierarchy under their section. */}
+                        {item.id === "workspaces" && railWorkspaces.length > 0 ? (
+                          <div className="mt-0.5 grid gap-0.5 pl-3">
+                            {railWorkspaces.slice(0, WORKSPACE_RAIL_LIMIT).map((workspace) => {
+                              const isOpen =
+                                isActive && activeWorkspaceId === workspace.id;
+                              return (
+                                <button
+                                  key={workspace.id}
+                                  type="button"
+                                  title={workspace.name}
+                                  onClick={() => {
+                                    setActiveSection("workspaces");
+                                    setActiveWorkspaceId(workspace.id);
+                                  }}
+                                  className={`nav-item py-1 text-[12px] ${
+                                    isOpen ? "nav-item-active" : ""
+                                  }`}
+                                >
+                                  <RailBullet />
+                                  <span className="truncate">{workspace.name}</span>
+                                </button>
+                              );
+                            })}
+
+                            {railWorkspaces.length > WORKSPACE_RAIL_LIMIT ? (
+                              <button
+                                type="button"
+                                title="See every workspace"
+                                onClick={() => {
+                                  setActiveSection("workspaces");
+                                  setActiveWorkspaceId(null);
+                                }}
+                                className="nav-item py-1 text-[12px]"
+                              >
+                                <span className="nav-glyph">
+                                  <svg
+                                    viewBox="0 0 12 12"
+                                    className="h-3 w-3"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="1.6"
+                                    aria-hidden="true"
+                                  >
+                                    <path d="M3 5l3 3 3-3" strokeLinecap="round" strokeLinejoin="round" />
+                                  </svg>
+                                </span>
+                                <span className="truncate">
+                                  More
+                                  <span className="text-ink-faint">
+                                    {" "}
+                                    ({railWorkspaces.length - WORKSPACE_RAIL_LIMIT})
+                                  </span>
+                                </span>
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
                     );
                   })}
                 </div>
@@ -2101,7 +2266,7 @@ function App() {
                   value={searchQuery}
                   onChange={setSearchQuery}
                   placeholder={
-                    activeSection === "all-apps" ? "Search workspaces…" : "Search installed…"
+                    activeSection === "all-apps" ? "Search apps…" : "Search installed…"
                   }
                 />
               </div>
@@ -2116,11 +2281,15 @@ function App() {
            * a stack of cards of their own height, so the container scrolls. Workflows
            * is a canvas that should fill whatever is left — pinning it to a
            * `calc(100vh - N)` guess left a strip of dead space at the bottom and
-           * broke as soon as the header changed size.
+           * broke as soon as the header changed size. Workspaces fills too, because
+           * the homescreen and the workspace scroll independently of each other and
+           * the cursor layer has to be sized to the surface, not to the content.
            */}
           <div
             className={`flex min-h-0 flex-1 flex-col gap-5 px-6 py-5 ${
-              activeSection === "workflows" ? "" : "scroll overflow-y-auto"
+              activeSection === "workflows" || activeSection === "workspaces"
+                ? ""
+                : "scroll overflow-y-auto"
             }`}
           >
             <SectionHeader
@@ -2156,6 +2325,16 @@ function App() {
                       Console
                     </button>
                   </>
+                ) : activeSection === "workspaces" ? (
+                  <button
+                    type="button"
+                    onClick={workspaceDirectory.reload}
+                    disabled={workspaceDirectory.loading}
+                    title="Re-read your workspaces and invitations"
+                    className="btn btn-ghost"
+                  >
+                    Refresh
+                  </button>
                 ) : showMetrics ? (
                   <MetricBar
                     available={availableProductsCount}
@@ -2281,6 +2460,27 @@ function App() {
                 resetToken={workflowReset}
                 consoleOpen={workflowConsole}
                 onConsoleClose={() => setWorkflowConsole(false)}
+                className="min-h-0 flex-1"
+              />
+            )}
+
+            {activeSection === "workspaces" && (
+              <WorkspacesPanel
+                apps={products.map((product) => ({
+                  slug: product.slug,
+                  name: product.name,
+                  installed: Boolean(productStatuses[product.slug]?.installed),
+                  icon: product.iconImage,
+                }))}
+                workspaces={workspaceDirectory.workspaces}
+                archived={workspaceDirectory.archived}
+                invitations={workspaceDirectory.invitations}
+                loading={workspaceDirectory.loading}
+                error={workspaceDirectory.error}
+                onReload={workspaceDirectory.reload}
+                openWorkspaceId={activeWorkspaceId}
+                onOpenWorkspace={setActiveWorkspaceId}
+                onLaunchApp={(slug) => void launchWorkspaceApp(slug)}
                 className="min-h-0 flex-1"
               />
             )}

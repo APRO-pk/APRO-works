@@ -1,0 +1,10 @@
+# Local development values for `wrangler dev`.
+#
+# Copy this file to `.dev.vars` (git-ignored) and fill it in. Wrangler reads it
+# instead of the deployed secrets, so this is what points a local room at the
+# real Supabase project.
+#
+# The publishable (legacy: anon) key. Never the service-role key: this worker
+# relays the caller's own access token to Supabase and must not be able to bypass
+# Row Level Security.
+SUPABASE_ANON_KEY=

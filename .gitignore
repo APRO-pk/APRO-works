@@ -50,3 +50,21 @@ temp/
 
 # Supabase local dev files, if you use Supabase CLI
 .supabase/
+
+# Credentials handed over for a one-off administrative action (applying a
+# migration, deploying the workspace worker). Never committed, and never read by
+# the app itself — the app only ever needs .env.
+.secrets/
+
+# Wrangler local state: Miniflare's Durable Object storage from `wrangler dev`,
+# plus any generated types. Machine-local scratch, not source.
+cloudflare/**/.wrangler/
+cloudflare/**/worker-configuration.d.ts
+cloudflare/**/.dry-run/
+
+# Wrangler's local secret file. It carries the same publishable key the app
+# already ships, but it is per-machine configuration and must never be committed
+# with a value in it. `.dev.vars.example` is the committed template.
+cloudflare/**/.dev.vars
+cloudflare/**/.dev.vars.*
+!cloudflare/**/.dev.vars.example

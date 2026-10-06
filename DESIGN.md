@@ -2,7 +2,18 @@
 
 **Status:** Implemented for M0–M2. See "Implementation status" below.
 **Scope:** Local-only data orchestration between APRO Works (the hub) and the products it installs and launches.
-**Out of scope for now:** cloud sync, multi-user sharing, network transport.
+**Out of scope for now:** cloud sync of this store, and network transport for it.
+
+> **A separate subsystem shares the word "workspace".** The hub also has a
+> **Workspaces** feature — cloud collaboration spaces where several people share
+> one set of applications and see each other's cursors. It is documented in
+> `cloudflare/workspace-room/README.md` and is deliberately *not* part of this
+> document: it does not touch the orchestration store, its artifacts, or its
+> event log. It has its own two backends (a Supabase schema for the durable
+> roster and a Cloudflare Durable Object for live presence) and no shared code
+> with the crates below. Where this document says "workspace" it means the
+> artifact-graph sense used throughout §5, and where it says "project" it means
+> the same thing.
 
 ## Implementation status
 
@@ -609,7 +620,7 @@ Generalization comes **after** a working vertical slice.
 
 ## 12. Open questions
 
-1. **Subscription granularity.** "This app requires type T" is a coarse filter — HexaDOF does not care about *every* grain geometry, only the one for the project it is working on. Type-level subscriptions produce cross-project notification noise. Options: (a) type-level only for v1, accept the noise; (b) per-instance subscriptions; (c) introduce a project/workspace scope as a middle layer. **Unresolved — blocks M3.**
+1. **Subscription granularity.** "This app requires type T" is a coarse filter — HexaDOF does not care about *every* grain geometry, only the one for the project it is working on. Type-level subscriptions produce cross-project notification noise. Options: (a) type-level only for v1, accept the noise; (b) per-instance subscriptions; (c) introduce a project/workspace scope as a middle layer. **Unresolved — blocks M3.** The Workspaces feature at the top of this document does introduce a workspace scope, and it is tempting to read that as option (c) arriving by the side door. It is not: that scope groups *people and applications* for collaboration, and it lives in Supabase and a Durable Object rather than in this store. Nothing in §5 hangs off it, and a subscription could not use it without a schema change here.
 2. **Auto-update UX.** On a stale `tracking` edge, does the update apply silently, prompt per-edge, or prompt once per app launch?
 3. **Multiple artifacts of one type per consumer.** `consumer_ref` (e.g. a run id) is designed to disambiguate, but the consumer-side UX is undefined.
 4. **Blob size ceiling.** If individual CAD payloads exceed a few hundred MB, the temp-file-and-rename path and the `inline_payload` threshold need explicit limits.
