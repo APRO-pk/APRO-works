@@ -13,6 +13,8 @@ import { WorkflowsPanel } from "./sections/WorkflowsPanel";
 import { WorkspacesPanel } from "./sections/WorkspacesPanel";
 import { AmbientDefence } from "./components/AmbientDefence";
 import { useWorkspaceDirectory } from "./lib/use-workspaces";
+import { JOIN_URL, openExternal } from "./lib/links";
+import { syncWorkspaceStorage, type StorageSyncReport } from "./lib/storage";
 import {
   ACCENTS,
   accentSwatch,
@@ -121,6 +123,20 @@ type MemberRecord = {
   email: string | null;
   full_name: string | null;
   member_type?: string | null;
+};
+
+/**
+ * APRO staff are rows in `public.admins`, a table of its own.
+ *
+ * It is keyed by `auth_id` rather than `auth_user_id`, it carries a `username`
+ * instead of a name and an email, and it has no account status because being in
+ * it *is* the approval. Most admins have no `members` row at all — which is why
+ * the hub used to turn them away.
+ */
+type AdminRecord = {
+  id: string | number;
+  auth_id: string | null;
+  username: string | null;
 };
 
 const RESTORED_WINDOW_WIDTH = 1440;
@@ -292,6 +308,24 @@ const sectionCopy: Record<SectionId, { title: string }> = {
   downloads: { title: "Downloads" },
   settings: { title: "Settings" },
 };
+
+/**
+ * One sentence for a finished storage sync.
+ *
+ * Counts rather than byte totals: the number a person can check against what they
+ * just made is "how many files", and formatting kilobytes for them is noise. Built
+ * from parts so that a sync with nothing to move produces an empty string and the
+ * caller can stay quiet.
+ */
+function describeSync(report: StorageSyncReport) {
+  const parts: string[] = [];
+  if (report.uploaded > 0) parts.push(`${report.uploaded} published for the workspace`);
+  if (report.downloaded > 0) parts.push(`${report.downloaded} fetched from it`);
+  if (report.failed > 0) {
+    parts.push(`${report.failed} could not be moved — ${report.detail ?? "no reason given"}`);
+  }
+  return parts.join(". ");
+}
 
 function initialsFromName(name: string) {
   const parts = name
@@ -477,6 +511,26 @@ function LoginScreen({
             <button type="submit" disabled={loading} className="btn btn-primary w-full py-2.5">
               {loading ? "Signing in…" : "Sign In"}
             </button>
+
+            {/* Accounts are approved by people, so there is nothing to create here — the
+                link leaves for the site's join page. It stays a real anchor so the address
+                can be copied from the status bar, with the click intercepted because
+                navigating the webview off the app would strand it with no way back. */}
+            <p className="pt-1 text-center text-[12px] text-ink-dim">
+              No account?{" "}
+              <a
+                href={JOIN_URL}
+                target="_blank"
+                rel="noreferrer noopener"
+                onClick={(event) => {
+                  event.preventDefault();
+                  void openExternal(JOIN_URL);
+                }}
+                className="font-medium text-accent underline-offset-2 hover:underline"
+              >
+                Sign up
+              </a>
+            </p>
           </form>
         </div>
       </div>
@@ -1428,36 +1482,87 @@ function App() {
   }, []);
 
   const profileName = member?.full_name?.trim() || authSession?.user?.email || "APRO member";
-  const profileSubtitle = member?.member_type ? `${member.member_type} member` : "Approved member";
+  const profileSubtitle =
+    member?.member_type === "ADMIN"
+      ? "Administrator"
+      : member?.member_type
+        ? `${member.member_type} member`
+        : "Approved member";
 
+  /**
+   * Decide whether this session may use the hub.
+   *
+   * Two populations sign in here and they live in different tables. Approved
+   * members are rows in `public.members`, keyed by `auth_user_id`. APRO staff
+   * are rows in `public.admins`, keyed by `auth_id`, and most of them have no
+   * `members` row at all — which is exactly why asking only the first table
+   * turned every admin away with "No member account was found for this user."
+   *
+   * `maybeSingle()` is deliberate. `.single()` reports "zero rows" and "the
+   * query itself failed" as the same error, so an RLS denial, a dropped
+   * connection or a renamed column were all announced as "you are not a
+   * member" — telling someone to go and request an account they already have.
+   * The two cases now say different things.
+   */
   async function validateApprovedMember(session: Session) {
-    const { data: memberRow, error } = await supabase
+    const { data: memberRow, error: memberError } = await supabase
       .from("members")
       .select("id, auth_user_id, account_status, email, full_name, member_type")
       .eq("auth_user_id", session.user.id)
-      .single();
+      .maybeSingle();
 
-    if (error || !memberRow) {
+    if (memberError) {
+      throw new Error("Could not verify your APRO account. Check your connection and try again.");
+    }
+
+    if (memberRow) {
+      if (memberRow.account_status === "PENDING") {
+        await supabase.auth.signOut();
+        throw new Error("Your application is still under review.");
+      }
+
+      if (memberRow.account_status === "REJECTED") {
+        await supabase.auth.signOut();
+        throw new Error("Your application has been rejected. Please contact APRO if you think this is a mistake.");
+      }
+
+      if (memberRow.account_status !== "APPROVED") {
+        await supabase.auth.signOut();
+        throw new Error("Your account is not allowed to access APRO Works.");
+      }
+
+      return memberRow as MemberRecord;
+    }
+
+    // No member row. Staff identity lives in `admins`, which RLS exposes to its
+    // owner through the `admins_select_own_row` policy (`auth_id = auth.uid()`),
+    // so this read runs on the person's own token and needs no elevated key.
+    const { data: adminRow, error: adminError } = await supabase
+      .from("admins")
+      .select("id, auth_id, username")
+      .eq("auth_id", session.user.id)
+      .maybeSingle();
+
+    if (adminError) {
+      throw new Error("Could not verify your APRO account. Check your connection and try again.");
+    }
+
+    if (!adminRow) {
       await supabase.auth.signOut();
       throw new Error("No member account was found for this user.");
     }
 
-    if (memberRow.account_status === "PENDING") {
-      await supabase.auth.signOut();
-      throw new Error("Your application is still under review.");
-    }
-
-    if (memberRow.account_status === "REJECTED") {
-      await supabase.auth.signOut();
-      throw new Error("Your application has been rejected. Please contact APRO if you think this is a mistake.");
-    }
-
-    if (memberRow.account_status !== "APPROVED") {
-      await supabase.auth.signOut();
-      throw new Error("Your account is not allowed to access APRO Works.");
-    }
-
-    return memberRow as MemberRecord;
+    // An admin row carries no email and no status, so the session supplies the
+    // former and being present in the table supplies the latter.
+    const admin = adminRow as AdminRecord;
+    return {
+      id: String(admin.id),
+      auth_user_id: session.user.id,
+      account_status: "APPROVED",
+      email: session.user.email ?? null,
+      full_name: admin.username ?? null,
+      member_type: "ADMIN",
+    } satisfies MemberRecord;
   }
 
   /**
@@ -1845,6 +1950,8 @@ function App() {
         title: `${product.name} launched`,
         detail: "Everyone else in the workspace can see that you are in it.",
       });
+      // Started, not awaited. See `mirrorWorkspaceStorage`.
+      void mirrorWorkspaceStorage();
     } catch (failure) {
       setSnackbar({
         visible: true,
@@ -1853,6 +1960,43 @@ function App() {
       });
     } finally {
       setLaunchOverlayProduct(null);
+    }
+  }
+
+  /**
+   * Publish this machine's store into the open workspace, and take back what is new.
+   *
+   * Deliberately fire-and-forget. The sync is a consequence of using an
+   * application rather than part of opening it, and making a launch wait on an
+   * upload would put a progress bar between somebody and the thing they clicked.
+   *
+   * Silence is the success case with nothing to report: announcing "0 files" on
+   * every launch would train people to ignore the one that matters. A failure is
+   * not silent, though — believing your work is shared when it is not is the
+   * expensive mistake here, and a snackbar is the cheapest way to avoid it.
+   */
+  async function mirrorWorkspaceStorage() {
+    const workspaceId = activeWorkspaceId;
+    if (!workspaceId) return;
+
+    try {
+      const report = await syncWorkspaceStorage(workspaceId);
+      const detail = describeSync(report);
+      if (!detail) return;
+      setSnackbar({
+        visible: true,
+        title: report.failed > 0 ? "Online storage is incomplete" : "Workspace files synced",
+        detail,
+      });
+    } catch (failure) {
+      setSnackbar({
+        visible: true,
+        title: "Could not reach online storage",
+        detail:
+          failure instanceof Error
+            ? failure.message
+            : "Your files are still on this machine, but nobody else can see them yet.",
+      });
     }
   }
 

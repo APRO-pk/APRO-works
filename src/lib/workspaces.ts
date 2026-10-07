@@ -633,12 +633,16 @@ export async function restoreWorkspace(workspaceId: string): Promise<void> {
 /**
  * Invite somebody by email.
  *
- * The database resolves the address against an approved hub member, and refuses
- * with "No approved APRO member was found for that email" if there is none —
- * which is why this can fail on an address a person believes is valid. It is a
- * real constraint of the schema, not a validation the client should try to
- * pre-empt: the hub cannot read the membership table to check first, and even if
- * it could, the check would be a race.
+ * The database resolves the address against an approved hub member or an APRO
+ * administrator, and refuses with "No approved APRO account was found for that
+ * email" if it matches neither — which is why this can fail on an address a
+ * person believes is valid. It is a real constraint of the schema, not a
+ * validation the client should try to pre-empt: the hub cannot read the
+ * membership table to check first, and even if it could, the check would be a
+ * race.
+ *
+ * Staff are matchable because `public.admins` carries no email of its own, so
+ * the lookup falls back to `auth.users` inside the function.
  *
  * Owners only. An editor calling this gets the function's own refusal.
  */

@@ -12,6 +12,7 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager};
 use zip::ZipArchive;
 
+mod storage_sync;
 mod store_host;
 mod update;
 
@@ -923,6 +924,29 @@ fn get_store_access(
     host.access_log(since, limit)
 }
 
+/// Mirror the local orchestration store into one workspace's online storage.
+///
+/// The token is the signed-in user's own, passed down from the frontend, because
+/// the session lives there and this process never sees a password. What that
+/// person may upload is decided by the storage Worker against Supabase; the hub
+/// takes no part in the decision and holds no key of its own.
+///
+/// Blocking HTTP, so it runs on the same blocking pool as the product commands.
+#[tauri::command]
+async fn sync_workspace_storage(
+    app: AppHandle,
+    base: String,
+    token: String,
+    workspace_id: String,
+) -> Result<storage_sync::SyncReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let host = app.state::<StoreHost>();
+        storage_sync::sync(host.store()?, &base, &token, &workspace_id)
+    })
+    .await
+    .map_err(|err| format!("Failed to sync online storage: {err}"))?
+}
+
 #[tauri::command]
 async fn uninstall_product(app: AppHandle, slug: String, exe_path: String) -> Result<ProductStatus, String> {
     tauri::async_runtime::spawn_blocking(move || uninstall_product_sync(app, slug, exe_path))
@@ -991,6 +1015,7 @@ pub fn run() {
             delete_store_subscription,
             materialize_store_subscriptions,
             get_store_access,
+            sync_workspace_storage,
             update::check_for_update
         ])
         .build(tauri::generate_context!())

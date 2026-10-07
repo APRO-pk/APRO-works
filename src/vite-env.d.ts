@@ -27,4 +27,12 @@ interface ImportMetaEnv {
    * setting to point at a different deployment.
    */
   readonly VITE_WORKSPACE_LIVE_URL?: string;
+  /**
+   * Origin of the online-storage Worker, from `cloudflare/workspace-storage`.
+   * No trailing slash.
+   *
+   * Optional in the same way: the code defaults to the deployed worker, so this
+   * only needs setting to point at a different deployment.
+   */
+  readonly VITE_WORKSPACE_STORAGE_URL?: string;
 }

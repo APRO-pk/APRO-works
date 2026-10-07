@@ -1,0 +1,12 @@
+# Copy to `.dev.vars` for `npm run dev`. Never commit `.dev.vars` — the
+# service-role key below bypasses every row-level policy in the project.
+#
+# SUPABASE_URL lives in wrangler.jsonc as a plain var; only the two keys are
+# secrets, so only they are needed here.
+#
+# The publishable key is the one already in the desktop app's `.env`
+# (VITE_SUPABASE_PUBLISHABLE_KEY). The service-role key is in the Supabase
+# dashboard under Project Settings → API keys; it is the long-lived JWT, not the
+# publishable one, and the two are easy to confuse at a glance.
+SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=

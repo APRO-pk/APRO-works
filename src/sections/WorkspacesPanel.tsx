@@ -36,12 +36,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CursorLayer } from "../components/workspace/CursorLayer";
+import { formatBytes } from "../lib/platform-data";
 import {
   createPresenceClient,
   type CursorTarget,
   type PresenceClient,
   type PresenceSnapshot,
 } from "../lib/presence";
+import { fetchStorageSummary, storageRatio, type StorageSummary } from "../lib/storage";
 import {
   addProject,
   canCollaborate,
@@ -306,6 +308,105 @@ function InvitationRow({
         </button>
       </div>
     </li>
+  );
+}
+
+/**
+ * The sentence under the storage bar.
+ *
+ * Separated from the markup because the interesting cases are the empty and the
+ * nearly-full one, and a nested ternary in JSX is where those cases stop being
+ * readable. Being nearly out of room is a genuine worse state, so it is the one
+ * place here that earns a semantic colour.
+ */
+function storageDetail(
+  summary: StorageSummary | null,
+  ratio: number,
+): { text: string; tone: "faint" | "warn" } {
+  if (!summary) {
+    return {
+      text: "Your own gigabyte for application files. A workspace's members can read what you share into it.",
+      tone: "faint",
+    };
+  }
+
+  if (summary.object_count === 0) {
+    return {
+      text: "Nothing stored yet. Files stay private to you until you share them into a workspace.",
+      tone: "faint",
+    };
+  }
+
+  if (ratio >= 0.9) {
+    const left = Math.max(0, summary.quota_bytes - summary.used_bytes);
+    return {
+      text: `Only ${formatBytes(left)} left. ${summary.shared_count} of ${summary.object_count} shared with a workspace.`,
+      tone: "warn",
+    };
+  }
+
+  const shared =
+    summary.shared_count > 0
+      ? `, ${summary.shared_count} shared with a workspace`
+      : ", none shared yet";
+  return {
+    text: `${summary.object_count} object${summary.object_count === 1 ? "" : "s"}${shared}.`,
+    tone: "faint",
+  };
+}
+
+/**
+ * How much of this account's online storage is spent.
+ *
+ * The bar is accent-coloured whatever its value: the quota is an allowance, not
+ * a score, and the number beside it is the actual answer. The colour is spent on
+ * the sentence instead, where "nearly out of room" is a real problem.
+ */
+function StorageMeter({
+  summary,
+  loading,
+  error,
+  onRetry,
+}: {
+  summary: StorageSummary | null;
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+}) {
+  const ratio = summary ? storageRatio(summary) : 0;
+  const detail = storageDetail(summary, ratio);
+
+  const amount = summary
+    ? `${formatBytes(summary.used_bytes)} of ${formatBytes(summary.quota_bytes)}`
+    : loading
+      ? "Checking…"
+      : "Unavailable";
+
+  return (
+    <section className="card rise flex flex-col gap-2 p-3.5">
+      <div className="flex items-baseline gap-2">
+        <span className="label">Online storage</span>
+        <div className="flex-1" />
+        <span className="text-[12px] text-ink-dim">{amount}</span>
+      </div>
+
+      <div className="progress-track h-2">
+        <div className="progress-fill h-full" style={{ width: `${Math.round(ratio * 100)}%` }} />
+      </div>
+
+      {error ? (
+        <div className="flex items-center gap-2">
+          <span className="min-w-0 flex-1 text-[11px] text-bad">{error}</span>
+          <button type="button" className="btn btn-ghost shrink-0" onClick={onRetry}>
+            Try again
+          </button>
+        </div>
+      ) : (
+        <p className={`text-[11px] ${detail.tone === "warn" ? "text-warn" : "text-ink-faint"}`}>
+          {detail.text}
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -879,7 +980,8 @@ function WorkspaceView({
                 </button>
               </div>
               <p className="text-[11px] text-ink-faint">
-                Only addresses that already belong to an approved APRO member can be invited.
+                Only addresses that already belong to an approved APRO member or an
+                APRO administrator can be invited.
               </p>
             </form>
           ) : null}
@@ -946,6 +1048,11 @@ export function WorkspacesPanel({
   const [projects, setProjects] = useState<WorkspaceProject[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [projectsError, setProjectsError] = useState<string | null>(null);
+
+  // The account's allowance, not any one workspace's. See `loadStorage`.
+  const [storage, setStorage] = useState<StorageSummary | null>(null);
+  const [storageLoading, setStorageLoading] = useState(true);
+  const [storageError, setStorageError] = useState<string | null>(null);
 
   const [presence, setPresence] = useState<PresenceSnapshot>(EMPTY_PRESENCE);
   const [focused, setFocused] = useState(true);
@@ -1023,6 +1130,41 @@ export function WorkspacesPanel({
       setProjectsLoading(false);
     }
   }, []);
+
+  /**
+   * The account's own online-storage allowance.
+   *
+   * Read once for the homescreen rather than per workspace: the gigabyte belongs
+   * to the person, not to any one workspace, so there is a single number to show
+   * and a single place it can be wrong. A failure here is not fatal to the
+   * panel — the workspaces below are perfectly usable without it — so it is
+   * kept in its own error rather than thrown at the page.
+   */
+  const loadStorage = useCallback(async () => {
+    setStorageLoading(true);
+    try {
+      setStorage(await fetchStorageSummary());
+      setStorageError(null);
+    } catch (failure) {
+      setStorageError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setStorageLoading(false);
+    }
+  }, []);
+
+  /**
+   * Re-read the meter whenever the directory is re-read.
+   *
+   * Depending on `workspaces` looks indirect, but it is the only signal this
+   * panel receives that the Refresh button was pressed or that the window came
+   * back into focus: `useWorkspaceDirectory` replaces that array on every load.
+   * It is a `useState` value, so its identity is stable between loads and this
+   * cannot loop.
+   */
+  useEffect(() => {
+    if (openWorkspace) return;
+    void loadStorage();
+  }, [openWorkspace, loadStorage, workspaces]);
 
   useEffect(() => {
     if (!openWorkspace) {
@@ -1235,6 +1377,13 @@ export function WorkspacesPanel({
               </ul>
             </section>
           ) : null}
+
+          <StorageMeter
+            summary={storage}
+            loading={storageLoading}
+            error={storageError}
+            onRetry={() => void loadStorage()}
+          />
 
           <section className="rise">
             <div className="mb-2 flex items-center gap-3">

@@ -1,0 +1,45 @@
+{
+  // A second Worker, deliberately separate from the presence room: this one
+  // holds a service-role key and that one must not.
+  // https://apro-workspace-storage.<account-subdomain>.workers.dev
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "apro-workspace-storage",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+
+  // The account that can hold a billing method, because R2 needs one. Same
+  // account as apro-workspace-room, so both Workers sit beside each other.
+  "account_id": "1ca3a30a82f07276f864c74dd55b17eb",
+
+  "workers_dev": true,
+
+  // One public hostname. A preview URL would be a second endpoint that nothing
+  // points at and nobody watches, and this Worker accepts uploads.
+  "preview_urls": false,
+
+  "r2_buckets": [{ "binding": "STORAGE", "bucket_name": "apro-workspace-storage" }],
+
+  "vars": {
+    // Public project URL. Not a secret — it is already in the desktop app's .env.
+    "SUPABASE_URL": "https://zljhwosvsdqvgcgusqct.supabase.co"
+  },
+
+  // Two Worker secrets, neither in this file:
+  //
+  //   npx wrangler secret put SUPABASE_ANON_KEY
+  //   npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+  //
+  // The first is the same publishable value that is compiled into the desktop
+  // app; it is here so the config stays reviewable without wondering which of
+  // its strings are load-bearing. The second is the real one: it bypasses every
+  // row-level policy in the project, is used only for the two storage-ledger
+  // writers that are revoked from `authenticated`, and must never be committed,
+  // logged, or returned to a caller. Rotating it invalidates this Worker until
+  // the secret is set again — the presence room is unaffected.
+  //
+  // `wrangler secret put` reads the value from stdin. On this machine it must be
+  // piped from an absolute path: a `Select-String .env` run from inside this
+  // directory finds nothing, and an empty value is accepted silently.
+
+  "observability": { "enabled": true }
+}

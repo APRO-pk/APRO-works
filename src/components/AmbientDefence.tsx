@@ -1,9 +1,11 @@
 /**
  * Ambient launch drill for the sign-in screen.
  *
- * An automated little scene that runs behind the sign-in card: an intruder drifts in
- * from the right, a hatch at the bottom of the window slides open, a rocket rises out
- * of it, hunts the intruder down, and goes home. It repeats on a random interval.
+ * An automated little scene that runs behind the sign-in card: two to four intruders
+ * cross the screen, entering from either edge at whatever speed they were given, a hatch
+ * at the bottom of the window slides open, a missile rises out of it after a random wait,
+ * hunts one intruder down, detonates against its hull, and the launcher arms another for
+ * whatever is still out there. It repeats on a random interval.
  *
  * Ground rules, because this is decoration on a screen somebody is trying to use:
  *
@@ -15,9 +17,9 @@
  *  * `aria-hidden` and `pointer-events: none`, so it can neither intercept a click nor
  *    reach a screen reader.
  *
- * Colours are accent and ink only. Variety comes from motion, size and alpha rather
- * than from more hues — the rest of the application reserves colour for meaning, and
- * a background decoration is not a good place to break that.
+ * Colours are accent and ink only. Variety comes from motion, size, direction and alpha
+ * rather than from more hues — the rest of the application reserves colour for meaning,
+ * and a background decoration is not a good place to break that.
  */
 
 import { useEffect, useRef } from "react";
@@ -60,8 +62,6 @@ type Intruder = {
   sinceDeath: number;
 };
 
-type Bullet = { pos: Vec; vel: Vec; life: number };
-
 type Particle = {
   pos: Vec;
   vel: Vec;
@@ -74,13 +74,18 @@ type Particle = {
   alpha: number;
 };
 
-type Rocket = {
+/**
+ * A single-use munition. It has no gun: the warhead is the weapon, so a missile is
+ * spent the moment it touches a hull.
+ */
+type Missile = {
   pos: Vec;
   vel: Vec;
   angle: number;
-  cooldown: number;
+  /** Seconds in the air; a missile that cannot find anything is a dud. */
+  life: number;
   /**
-   * The intruder this rocket has decided to kill.
+   * The intruder this missile has decided to kill.
    *
    * A reference, not an index: wrecks and escapees are culled from the array, and an
    * index would quietly start pointing at a different intruder the moment anything
@@ -89,9 +94,21 @@ type Rocket = {
   target: Intruder | null;
 };
 
-type Phase = "idle" | "open" | "hunt" | "return" | "close";
+type Phase = "idle" | "open" | "hunt" | "close";
 
 const MAX_PARTICLES = 340;
+
+/** How many missiles may be in the air at once, so a wave is not one long queue. */
+const MAX_MISSILES = 2;
+/** The wait between launches. This is the randomness the drill is built on. */
+const MISSILE_INTERVAL_MIN = 0.35;
+const MISSILE_INTERVAL_MAX = 1.5;
+/** How close a missile has to come to a hull before the warhead goes off. */
+const MISSILE_RADIUS = 7;
+const MISSILE_MAX_SPEED = 400;
+const MISSILE_THRUST = 900;
+/** A missile that has been in the air this long is a dud and goes off where it is. */
+const MISSILE_LIFETIME = 8;
 
 const TAU = Math.PI * 2;
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
@@ -103,6 +120,22 @@ function angleDelta(a: number, b: number): number {
   if (d > Math.PI) d -= TAU;
   if (d < -Math.PI) d += TAU;
   return d;
+}
+
+/**
+ * Shortest distance from `p` to the segment `a`→`b`.
+ *
+ * A missile covers up to ~20px between frames while the smallest hull is 11px across,
+ * so testing only where the missile ended up lets it pass clean through a target it
+ * plainly hit. Sweeping the frame's travel catches that.
+ */
+function distToSegment(p: Vec, a: Vec, b: Vec): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < 1e-6) return Math.hypot(p.x - a.x, p.y - a.y);
+  const t = clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq, 0, 1);
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 }
 
 /**
@@ -147,11 +180,12 @@ export function AmbientDefence({ className = "" }: { className?: string }) {
     let lid = 0;
     let shake = 0;
     let huntClock = 0;
+    /** Counts down to the next launch; only the launcher cares about it. */
+    let launchTimer = 0;
 
     const intruders: Intruder[] = [];
-    const bullets: Bullet[] = [];
+    const missiles: Missile[] = [];
     const particles: Particle[] = [];
-    let rocket: Rocket | null = null;
 
     function resize() {
       const rect = canvas!.getBoundingClientRect();
@@ -214,14 +248,30 @@ export function AmbientDefence({ className = "" }: { className?: string }) {
       shake = Math.min(1, shake + 0.55 * strength);
     }
 
+    /** Kill a hull, leaving a wreck for the culler to retire. */
+    function wreck(n: Intruder) {
+      n.alive = false;
+      n.sinceDeath = 0;
+      n.vel.x *= 0.3;
+      n.vel.y *= 0.3;
+      n.spinRate = rand(-9, 9);
+    }
+
     function spawnWave() {
-      const count = Math.random() < 0.34 ? 2 : 1;
+      // Several at once, so the screen reads as a raid rather than a duel.
+      const count = 2 + Math.floor(Math.random() * 3);
       for (let i = 0; i < count; i += 1) {
-        const size = rand(11, 19);
+        // Half come in from the left. The hatch does not care which side it fires at,
+        // and a scene where everything arrives from one edge looks staged.
+        const fromLeft = Math.random() < 0.5;
+        const speed = rand(22, 76);
         intruders.push({
-          pos: { x: width + 40 + i * rand(70, 150), y: rand(height * 0.08, height * 0.36) },
-          vel: { x: -rand(20, 38), y: rand(-5, 7) },
-          size,
+          pos: {
+            x: fromLeft ? -40 - i * rand(70, 150) : width + 40 + i * rand(70, 150),
+            y: rand(height * 0.08, height * 0.36),
+          },
+          vel: { x: fromLeft ? speed : -speed, y: rand(-5, 7) },
+          size: rand(11, 19),
           wobbleAmp: rand(8, 30),
           wobbleHz: rand(0.25, 0.6),
           phase: rand(0, TAU),
@@ -231,7 +281,18 @@ export function AmbientDefence({ className = "" }: { className?: string }) {
           sinceDeath: 0,
         });
       }
-      if (rocket) rocket.target = null;
+    }
+
+    function launchMissile(target: Intruder) {
+      missiles.push({
+        // Nudged up out of the bay, so a launch reads as leaving the hatch rather than
+        // appearing beside it.
+        pos: { x: hatchX(), y: hatchY() + 2 },
+        vel: { x: 0, y: -150 },
+        angle: -Math.PI / 2,
+        life: 0,
+        target,
+      });
     }
 
     // ---------------------------------------------------------------- update
@@ -254,13 +315,9 @@ export function AmbientDefence({ className = "" }: { className?: string }) {
       if (phase === "open" && lid >= 1) {
         phase = "hunt";
         huntClock = 0;
-        rocket = {
-          pos: { x: hatchX(), y: hatchY() + 4 },
-          vel: { x: 0, y: -60 },
-          angle: -Math.PI / 2,
-          cooldown: 0.2,
-          target: null,
-        };
+        // The first missile goes almost at once, so the drill answers the raid rather
+        // than waiting on the cadence before doing anything.
+        launchTimer = rand(0.15, 0.5);
       }
 
       // Intruders drift, wobble, and tumble once dead.
@@ -278,106 +335,94 @@ export function AmbientDefence({ className = "" }: { className?: string }) {
         }
       }
 
-      // Rocket.
-      if (rocket) {
-        const alive = intruders.filter((n) => n.alive);
+      if (phase === "hunt") {
+        huntClock += dt;
+        const live = intruders.filter((n) => n.alive);
 
-        if (phase === "hunt") {
-          huntClock += dt;
-
-          if (alive.length === 0 && huntClock > 0.35) {
-            phase = "return";
-          } else if (huntClock > 22) {
-            // Safety valve. The steering is damped so a chase should always resolve,
-            // but a stuck rocket must not leave the lid open forever.
-            phase = "return";
-          } else {
-            // "Randomly tracks": commit to one target until it is gone, then pick
-            // another at random rather than always taking the nearest.
-            if (rocket.target === null || !rocket.target.alive) {
-              rocket.target = alive.length > 0 ? alive[Math.floor(Math.random() * alive.length)] : null;
-            }
-
-            const target = rocket.target;
-            if (target) {
-              const dx = target.pos.x - rocket.pos.x;
-              const dy = target.pos.y - rocket.pos.y;
-              const dist = Math.hypot(dx, dy) || 1;
-              const desired = Math.atan2(dy, dx);
-
-              // Turn rate is limited, so the rocket arcs instead of snapping.
-              const turn = clamp(angleDelta(rocket.angle, desired), -4.2 * dt, 4.2 * dt);
-              rocket.angle += turn;
-
-              // Thrust eases off on approach, which stops it orbiting the target.
-              const thrust = dist > 150 ? 430 : 250;
-              rocket.vel.x += Math.cos(rocket.angle) * thrust * dt;
-              rocket.vel.y += Math.sin(rocket.angle) * thrust * dt;
-
-              // Fire when roughly lined up and in range.
-              rocket.cooldown -= dt;
-              const aimed = Math.abs(angleDelta(rocket.angle, desired)) < 0.3;
-              if (aimed && dist < 300 && rocket.cooldown <= 0) {
-                rocket.cooldown = rand(0.22, 0.34);
-                const spread = rand(-0.05, 0.05);
-                bullets.push({
-                  pos: {
-                    x: rocket.pos.x + Math.cos(rocket.angle) * 13,
-                    y: rocket.pos.y + Math.sin(rocket.angle) * 13,
-                  },
-                  vel: {
-                    x: Math.cos(rocket.angle + spread) * 620,
-                    y: Math.sin(rocket.angle + spread) * 620,
-                  },
-                  life: 1.1,
-                });
-              }
-            }
-          }
-        } else if (phase === "return") {
-          const dx = hatchX() - rocket.pos.x;
-          const dy = hatchY() - rocket.pos.y;
-          const dist = Math.hypot(dx, dy) || 1;
-          const desired = Math.atan2(dy, dx);
-          rocket.angle += clamp(angleDelta(rocket.angle, desired), -5 * dt, 5 * dt);
-          rocket.vel.x += Math.cos(rocket.angle) * 420 * dt;
-          rocket.vel.y += Math.sin(rocket.angle) * 420 * dt;
-          if (dist < 16) {
-            rocket = null;
-            phase = "close";
+        if (live.length === 0 && missiles.length === 0 && huntClock > 0.5) {
+          phase = "close";
+        } else if (huntClock > 30) {
+          // Safety valve. Missiles are quick and single-use, so a raid should always
+          // resolve, but a stuck scene must not leave the lid open forever.
+          phase = "close";
+        } else {
+          launchTimer -= dt;
+          if (launchTimer <= 0 && live.length > 0 && missiles.length < MAX_MISSILES) {
+            // "Randomly tracks": a missile commits to one intruder until it is gone,
+            // rather than every launch taking the nearest.
+            launchMissile(live[Math.floor(Math.random() * live.length)]);
+            launchTimer = rand(MISSILE_INTERVAL_MIN, MISSILE_INTERVAL_MAX);
           }
         }
+      }
 
-        if (rocket) {
-          const speed = Math.hypot(rocket.vel.x, rocket.vel.y);
-          const maxSpeed = phase === "return" ? 300 : 340;
-          if (speed > maxSpeed) {
-            rocket.vel.x = (rocket.vel.x / speed) * maxSpeed;
-            rocket.vel.y = (rocket.vel.y / speed) * maxSpeed;
-          }
-          rocket.pos.x += rocket.vel.x * dt;
-          rocket.pos.y += rocket.vel.y * dt;
+      // Missiles.
+      for (let i = missiles.length - 1; i >= 0; i -= 1) {
+        const m = missiles[i];
+        m.life += dt;
 
-          // Engine wash, heavier under thrust.
-          if (Math.random() < 0.85) {
-            const back = rocket.angle + Math.PI + rand(-0.3, 0.3);
-            addParticle({
-              pos: {
-                x: rocket.pos.x + Math.cos(back) * 9,
-                y: rocket.pos.y + Math.sin(back) * 9,
-              },
-              vel: {
-                x: Math.cos(back) * rand(18, 60) - rocket.vel.x * 0.12,
-                y: Math.sin(back) * rand(18, 60) - rocket.vel.y * 0.12,
-              },
-              life: rand(0.2, 0.5),
-              max: 0.5,
-              size: rand(1.2, 3),
-              drag: 2.6,
-              kind: "spark",
-              alpha: 0.8,
-            });
-          }
+        // A target can be taken by the other missile, so re-acquire rather than chase a
+        // wreck.
+        if (m.target === null || !m.target.alive) {
+          const live = intruders.filter((n) => n.alive);
+          m.target = live.length > 0 ? live[Math.floor(Math.random() * live.length)] : null;
+        }
+
+        const target = m.target;
+        if (!target || m.life > MISSILE_LIFETIME) {
+          // Nothing left to kill, or a dud. A single-use munition goes off where it is;
+          // there is no flight home to draw.
+          burst({ x: m.pos.x, y: m.pos.y }, 0.45);
+          missiles.splice(i, 1);
+          continue;
+        }
+
+        const dx = target.pos.x - m.pos.x;
+        const dy = target.pos.y - m.pos.y;
+        const desired = Math.atan2(dy, dx);
+
+        // Turn rate is limited, so the missile arcs instead of snapping, but it is
+        // tighter than a piloted craft because it has no hovering to do.
+        m.angle += clamp(angleDelta(m.angle, desired), -6 * dt, 6 * dt);
+        m.vel.x += Math.cos(m.angle) * MISSILE_THRUST * dt;
+        m.vel.y += Math.sin(m.angle) * MISSILE_THRUST * dt;
+
+        const speed = Math.hypot(m.vel.x, m.vel.y);
+        if (speed > MISSILE_MAX_SPEED) {
+          m.vel.x = (m.vel.x / speed) * MISSILE_MAX_SPEED;
+          m.vel.y = (m.vel.y / speed) * MISSILE_MAX_SPEED;
+        }
+
+        const from: Vec = { x: m.pos.x, y: m.pos.y };
+        m.pos.x += m.vel.x * dt;
+        m.pos.y += m.vel.y * dt;
+
+        if (distToSegment(target.pos, from, m.pos) < target.size + MISSILE_RADIUS) {
+          wreck(target);
+          burst({ x: m.pos.x, y: m.pos.y }, 1.15);
+          missiles.splice(i, 1);
+          continue;
+        }
+
+        // Exhaust trail, heavier under thrust.
+        if (Math.random() < 0.9) {
+          const back = m.angle + Math.PI + rand(-0.28, 0.28);
+          addParticle({
+            pos: {
+              x: m.pos.x + Math.cos(back) * 8,
+              y: m.pos.y + Math.sin(back) * 8,
+            },
+            vel: {
+              x: Math.cos(back) * rand(16, 54) - m.vel.x * 0.12,
+              y: Math.sin(back) * rand(16, 54) - m.vel.y * 0.12,
+            },
+            life: rand(0.2, 0.5),
+            max: 0.5,
+            size: rand(1.2, 3),
+            drag: 2.6,
+            kind: "spark",
+            alpha: 0.8,
+          });
         }
       }
 
@@ -386,44 +431,19 @@ export function AmbientDefence({ className = "" }: { className?: string }) {
         timer = 0;
         waitFor = rand(20, 40);
         intruders.length = 0;
+        missiles.length = 0;
       }
 
-      // Cull: wrecks that have finished fading, and intruders that slipped past the
-      // left edge. Without the second case a survivor the rocket never caught would
-      // stay "alive" forever and the drill could never end.
+      // Cull: wrecks that have finished fading, and intruders that crossed the screen
+      // and got away. Both edges, because they come from both.
       for (let i = intruders.length - 1; i >= 0; i -= 1) {
         const n = intruders[i];
-        const gone = n.alive ? n.pos.x < -70 : n.sinceDeath > 0.9;
+        const gone = n.alive
+          ? n.pos.x < -70 || n.pos.x > width + 70
+          : n.sinceDeath > 0.9;
         if (!gone) continue;
-        if (rocket && rocket.target === n) rocket.target = null;
+        for (const m of missiles) if (m.target === n) m.target = null;
         intruders.splice(i, 1);
-      }
-
-      // Bullets and hits.
-      for (let i = bullets.length - 1; i >= 0; i -= 1) {
-        const b = bullets[i];
-        b.life -= dt;
-        b.pos.x += b.vel.x * dt;
-        b.pos.y += b.vel.y * dt;
-
-        let hit = false;
-        for (const n of intruders) {
-          if (!n.alive) continue;
-          if (Math.hypot(n.pos.x - b.pos.x, n.pos.y - b.pos.y) < n.size * 0.95) {
-            n.alive = false;
-            n.sinceDeath = 0;
-            n.vel.x *= 0.3;
-            n.vel.y *= 0.3;
-            n.spinRate = rand(-9, 9);
-            burst({ x: n.pos.x, y: n.pos.y }, 1);
-            hit = true;
-            break;
-          }
-        }
-
-        if (hit || b.life <= 0 || b.pos.x < -30 || b.pos.x > width + 30) {
-          bullets.splice(i, 1);
-        }
       }
 
       // Particles.
@@ -455,6 +475,9 @@ export function AmbientDefence({ className = "" }: { className?: string }) {
       ctx!.save();
       ctx!.translate(n.pos.x, n.pos.y);
       ctx!.rotate(n.spin);
+      // Face the way it is travelling. The shape's nose points along +x, so a hull
+      // entering from the right would otherwise read as being dragged backwards.
+      if (n.vel.x < 0) ctx!.scale(-1, 1);
       ctx!.globalAlpha = (n.alive ? 0.5 : 0.35) * fade;
 
       ctx!.beginPath();
@@ -478,24 +501,6 @@ export function AmbientDefence({ className = "" }: { className?: string }) {
         ctx!.fillStyle = palette.ink;
         ctx!.fill();
       }
-      ctx!.restore();
-    }
-
-    function drawBullet(b: Bullet) {
-      ctx!.save();
-      ctx!.globalAlpha = Math.min(1, b.life * 3);
-      const tailX = b.pos.x - b.vel.x * 0.022;
-      const tailY = b.pos.y - b.vel.y * 0.022;
-      const grad = ctx!.createLinearGradient(tailX, tailY, b.pos.x, b.pos.y);
-      grad.addColorStop(0, "transparent");
-      grad.addColorStop(1, palette.ink);
-      ctx!.strokeStyle = grad;
-      ctx!.lineWidth = 1.7;
-      ctx!.lineCap = "round";
-      ctx!.beginPath();
-      ctx!.moveTo(tailX, tailY);
-      ctx!.lineTo(b.pos.x, b.pos.y);
-      ctx!.stroke();
       ctx!.restore();
     }
 
@@ -525,55 +530,66 @@ export function AmbientDefence({ className = "" }: { className?: string }) {
       ctx!.restore();
     }
 
-    /** The rocket, drawn as a rectangle body with a triangular nose. */
-    function drawRocket(r: Rocket) {
+    /** The missile: a slim tube with a pointed nose and tail fins, nose-first. */
+    function drawMissile(m: Missile) {
       ctx!.save();
-      ctx!.translate(r.pos.x, r.pos.y);
-      ctx!.rotate(r.angle);
+      ctx!.translate(m.pos.x, m.pos.y);
+      ctx!.rotate(m.angle);
 
-      const L = 22;
-      const W = 9;
+      const L = 18;
+      const W = 7;
 
-      // Flame: two flickering triangles, sized by how hard it is thrusting.
-      const speed = Math.hypot(r.vel.x, r.vel.y);
-      const burn = clamp(speed / 340, 0.25, 1);
-      ctx!.globalAlpha = 0.75;
+      // Flame first, so it burns behind the body rather than over it.
+      const speed = Math.hypot(m.vel.x, m.vel.y);
+      const burn = clamp(speed / MISSILE_MAX_SPEED, 0.3, 1);
       ctx!.fillStyle = palette.accent;
       for (let i = 0; i < 2; i += 1) {
-        const len = (13 + i * 9) * burn * rand(0.75, 1.15);
-        const half = (W * 0.34) * (1 - i * 0.4);
+        const len = (12 + i * 8) * burn * rand(0.75, 1.15);
+        const half = W * 0.38 * (1 - i * 0.4);
         ctx!.beginPath();
-        ctx!.moveTo(-L * 0.55, -half);
-        ctx!.lineTo(-L * 0.55 - len, 0);
-        ctx!.lineTo(-L * 0.55, half);
+        ctx!.moveTo(-L * 0.5, -half);
+        ctx!.lineTo(-L * 0.5 - len, 0);
+        ctx!.lineTo(-L * 0.5, half);
         ctx!.closePath();
         ctx!.globalAlpha = i === 0 ? 0.85 : 0.4;
         ctx!.fill();
       }
 
-      // Body.
       ctx!.globalAlpha = 0.95;
-      ctx!.beginPath();
-      ctx!.rect(-L * 0.55, -W / 2, L * 0.7, W);
       ctx!.fillStyle = palette.accent;
+
+      // Body.
+      ctx!.beginPath();
+      ctx!.rect(-L * 0.5, -W / 2, L * 0.72, W);
       ctx!.fill();
 
       // Nose.
       ctx!.beginPath();
-      ctx!.moveTo(L * 0.15, -W / 2);
-      ctx!.lineTo(L * 0.5, 0);
-      ctx!.lineTo(L * 0.15, W / 2);
+      ctx!.moveTo(L * 0.22, -W / 2);
+      ctx!.lineTo(L * 0.55, 0);
+      ctx!.lineTo(L * 0.22, W / 2);
       ctx!.closePath();
-      ctx!.fillStyle = palette.accent;
+      ctx!.fill();
+
+      // Tail fins, which is what separates the silhouette from the old rocket.
+      ctx!.beginPath();
+      ctx!.moveTo(-L * 0.5, -W / 2);
+      ctx!.lineTo(-L * 0.62, -W * 1.05);
+      ctx!.lineTo(-L * 0.28, -W / 2);
+      ctx!.closePath();
+      ctx!.moveTo(-L * 0.5, W / 2);
+      ctx!.lineTo(-L * 0.62, W * 1.05);
+      ctx!.lineTo(-L * 0.28, W / 2);
+      ctx!.closePath();
       ctx!.fill();
 
       // A bright spine so the silhouette reads against the background.
-      ctx!.globalAlpha = 0.55;
+      ctx!.globalAlpha = 0.5;
       ctx!.strokeStyle = palette.ink;
       ctx!.lineWidth = 0.9;
       ctx!.beginPath();
-      ctx!.moveTo(-L * 0.5, 0);
-      ctx!.lineTo(L * 0.4, 0);
+      ctx!.moveTo(-L * 0.44, 0);
+      ctx!.lineTo(L * 0.36, 0);
       ctx!.stroke();
 
       ctx!.restore();
@@ -647,8 +663,7 @@ export function AmbientDefence({ className = "" }: { className?: string }) {
       }
 
       for (const n of intruders) drawIntruder(n, t);
-      if (rocket) drawRocket(rocket);
-      for (const b of bullets) drawBullet(b);
+      for (const m of missiles) drawMissile(m);
       for (const p of particles) drawParticle(p);
       drawHatch(t);
 

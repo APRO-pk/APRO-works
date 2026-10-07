@@ -848,8 +848,14 @@ input[type="password"]::-ms-reveal {
  * The position is written by JavaScript on every animation frame — see
  * `src/components/workspace/CursorLayer.tsx` — so the only thing CSS does here is
  * give the browser the hint it needs to keep that off the main thread, and
- * handle the one thing JavaScript should not: fading a pointer in and out as
- * somebody joins or leaves.
+ * handle the things JavaScript should not: fading a pointer in and out as
+ * somebody joins or leaves, and revealing who they are while the arrow is
+ * pointed at.
+ *
+ * That last part is why there is a `:hover` rule here at all. Hovering must not
+ * cost a React render — the layer goes to some trouble never to re-render for a
+ * cursor — and a hover state is something the browser already tracks. So the
+ * detail card is always in the DOM and simply faded in.
  */
 .cursor-layer {
   /* The layer must not intercept clicks aimed at the workspace underneath. */
@@ -872,14 +878,50 @@ input[type="password"]::-ms-reveal {
   transition: opacity 160ms ease-out;
 }
 
+/**
+ * The one part of a remote pointer that can be pointed at.
+ *
+ * A cursor that swallowed clicks would be a hole in the application — somebody
+ * parking their mouse over a button would stop everyone else pressing it — so the
+ * hit area is a small invisible square over the arrow and nothing else. It is
+ * larger than the arrow so the target is reachable, and it never covers the name
+ * chip beside it, which stays a label rather than a control.
+ */
+.cursor-mark::before {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: -8px;
+  width: 34px;
+  height: 34px;
+  pointer-events: auto;
+}
+
+.cursor-mark:hover {
+  /* Above the other pointers, so the revealed card is never clipped by one. */
+  z-index: 2;
+}
+
+.cursor-mark svg {
+  transition: transform 140ms ease-out;
+}
+
+.cursor-mark:hover svg {
+  transform: scale(1.18);
+}
+
 .cursor-chip {
   margin-top: 12px;
   max-width: 148px;
   overflow: hidden;
   padding: 2px 7px;
   border-radius: var(--radius-pill);
-  /* Tinted by the peer's own cursor colour, set as `color` on .cursor-mark. */
-  background: currentColor;
+  /*
+   * The tint is an inline `background` from the component, not `currentColor`.
+   * `currentColor` resolves against the declaring element's OWN `color`, which is
+   * the line below — so the chip painted itself in the text colour and the name
+   * came out black on black.
+   */
   color: var(--color-canvas);
   font-size: 11px;
   font-weight: 600;
@@ -887,6 +929,38 @@ input[type="password"]::-ms-reveal {
   text-overflow: ellipsis;
   white-space: nowrap;
   box-shadow: 0 1px 6px var(--color-scrim);
+  transition: box-shadow 140ms ease-out;
+}
+
+.cursor-mark:hover .cursor-chip {
+  box-shadow: 0 0 0 2px var(--color-ink), 0 1px 6px var(--color-scrim);
+}
+
+/** Who the arrow belongs to. Faded in on hover, never removed. */
+.cursor-detail {
+  position: absolute;
+  left: 0;
+  top: 36px;
+  z-index: 1;
+  display: flex;
+  min-width: 118px;
+  max-width: 224px;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 9px;
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-raised);
+  box-shadow: 0 8px 24px var(--color-scrim);
+  opacity: 0;
+  transition: opacity 140ms ease-out;
+  /* Never a target itself: the card must not hold the pointer open over the
+     application, and it must not extend the dead zone the arrow creates. */
+  pointer-events: none;
+}
+
+.cursor-mark:hover .cursor-detail {
+  opacity: 1;
 }
 
 /**

@@ -26,6 +26,20 @@
  * saying "still about there". Interpolation is what makes a low rate look
  * smooth, so the frames are the thing to economise, not the motion.
  *
+ * ## Why nothing is sent to an empty room
+ *
+ * A cursor frame is a broadcast, so with nobody else present it is a request that
+ * changes nothing. A pointer moving alone in a workspace would otherwise spend
+ * ten requests a second telling a Durable Object about a room with no audience,
+ * which is the common case — most of the time somebody is the only person in
+ * their workspace.
+ *
+ * The connection stays open, and that is not an oversight: the socket is the only
+ * way this client learns that somebody has arrived. What is withheld is the
+ * traffic, not the subscription to it. The moment a peer appears, the current
+ * position goes out, so the newcomer sees where the pointer is rather than
+ * waiting for it to move.
+ *
  * ## Interpolation
  *
  * The request was explicit: update, and interpolate if updates are not quick
@@ -136,7 +150,7 @@ export const CURSOR_TAU_MS = 90;
  * missing, which is the kind of failure nobody notices until two people are
  * staring at the same screen wondering why they cannot see each other.
  */
-const DEFAULT_LIVE_BASE = "https://apro-workspace-room.aliarsalan-u6.workers.dev";
+const DEFAULT_LIVE_BASE = "https://apro-workspace-room.henryarkenberg.workers.dev";
 
 /**
  * The live endpoint. `VITE_WORKSPACE_LIVE_URL` overrides the default, which is
@@ -192,6 +206,14 @@ export function createPresenceClient({ workspaceId, onFatal }: Options): Presenc
   let pendingCursor: CursorTarget | null = null;
   /** The last position that actually went out, for the movement threshold. */
   let lastSentCursor: CursorTarget | null = null;
+  /**
+   * The newest position this pointer has been at, sent or not.
+   *
+   * Kept separately from `pendingCursor` because that is emptied whenever a
+   * frame goes out or is written off as too small a move, and this is what gets
+   * offered to somebody joining an otherwise empty room.
+   */
+  let lastPointer: CursorTarget | null = null;
   let cursorTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** The last application this client announced, so `#hello` can restore it. */
@@ -234,6 +256,17 @@ export function createPresenceClient({ workspaceId, onFatal }: Options): Presenc
     commit({ peers });
   }
 
+  /**
+   * Whether anybody else is in the room to receive a cursor.
+   *
+   * The room fans every frame out to every other member, so with an empty roster
+   * a frame is a request that changes nothing. Nothing is sent through the socket
+   * until there is somebody on the other end of it.
+   */
+  function hasAudience(): boolean {
+    return snapshot.peers.length > 0;
+  }
+
   function send(message: ClientMessage): void {
     if (socket?.readyState !== WebSocket.OPEN) return;
     try {
@@ -257,6 +290,10 @@ export function createPresenceClient({ workspaceId, onFatal }: Options): Presenc
         // Restore what this client was doing before the reconnect. A dropped
         // connection should not make someone appear to leave their application.
         if (announcedApp !== null) send({ t: "app", slug: announcedApp });
+
+        // Somebody may already have been here through the reconnect; they should
+        // not have to wait for this pointer to move to see where it is.
+        announceCursor();
         return;
       }
 
@@ -268,6 +305,10 @@ export function createPresenceClient({ workspaceId, onFatal }: Options): Presenc
         if (message.peer.cursor) targets.set(message.peer.id, message.peer.cursor);
 
         setPeers(Array.from(peers.values()));
+
+        // The first audience for a while: this client has been holding its
+        // position back, so it goes out now.
+        announceCursor();
         return;
       }
 
@@ -461,12 +502,37 @@ export function createPresenceClient({ workspaceId, onFatal }: Options): Presenc
    * Returns silently when nothing is queued, so a timer that fires after the
    * pointer stopped moving does not re-send a position the other end already
    * has.
+   *
+   * Also returns silently when the room is empty. The queued position is kept
+   * rather than dropped, which costs nothing — the next pointer event overwrites
+   * it — and means the room's last-known position for this client is a stale one
+   * only until somebody arrives.
    */
   function flushCursor(now: number): void {
     if (!pendingCursor) return;
+    if (!hasAudience()) return;
+
     lastCursorSentAt = now;
     lastSentCursor = pendingCursor;
     send({ t: "cursor", ...pendingCursor });
+    pendingCursor = null;
+  }
+
+  /**
+   * Tell a room that has just gained its first listener where this pointer is.
+   *
+   * Without this, somebody joining an empty workspace would see the *last*
+   * position the Durable Object holds — which for a person who has been alone
+   * for a while is wherever their pointer was when the previous colleague left.
+   * A cursor that is wrong until its owner happens to move is worse than one
+   * that appears a moment late, so the current position is sent on arrival.
+   */
+  function announceCursor(): void {
+    if (!lastPointer || !hasAudience()) return;
+
+    lastCursorSentAt = Date.now();
+    lastSentCursor = lastPointer;
+    send({ t: "cursor", ...lastPointer });
     pendingCursor = null;
   }
 
@@ -518,6 +584,7 @@ export function createPresenceClient({ workspaceId, onFatal }: Options): Presenc
       targets.clear();
       pendingCursor = null;
       lastSentCursor = null;
+      lastPointer = null;
       lastCursorSentAt = 0;
       snapshot = EMPTY_SNAPSHOT;
       for (const listener of listeners) listener();
@@ -535,6 +602,11 @@ export function createPresenceClient({ workspaceId, onFatal }: Options): Presenc
         x: Math.min(1, Math.max(0, x)),
         y: Math.min(1, Math.max(0, y)),
       };
+
+      // Recorded before any decision about sending: in an empty room this is the
+      // only trace of where the pointer is, and it is what goes out to the first
+      // person to arrive.
+      lastPointer = next;
 
       // Too close to the last position that went out to be worth a broadcast.
       // The queued point is dropped rather than kept, so a superseded position

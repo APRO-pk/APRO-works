@@ -16,6 +16,10 @@
  * The loop never stops while the layer is mounted. A frame that does nothing
  * costs a fraction of a millisecond, and starting and stopping the loop on every
  * cursor arrival would reintroduce exactly the latency this avoids.
+ *
+ * Pointing at a pointer reveals whose it is, and that is a CSS hover on these
+ * same nodes rather than React state — identifying somebody is precisely the kind
+ * of interaction that would otherwise undo the above.
  */
 
 import { useEffect, useRef } from "react";
@@ -154,28 +158,48 @@ export function CursorLayer({ peers, targets, active }: CursorLayerProps) {
       aria-hidden="true"
       className="cursor-layer pointer-events-none absolute inset-0 z-20 overflow-hidden"
     >
-      {peers.map((peer) => (
-        <div
-          key={peer.id}
-          ref={(node) => {
-            if (node) nodes.current.set(peer.id, node);
-            else nodes.current.delete(peer.id);
-          }}
-          className="cursor-mark"
-          style={{ color: cursorColor(peer.color) }}
-        >
-          <svg width="17" height="17" viewBox="0 0 18 18" aria-hidden="true">
-            <path
-              d="M1.5 1.2 L1.5 15.1 L5.3 11.4 L8 16.9 L10.4 15.8 L7.7 10.4 L12.8 10.4 Z"
-              fill="currentColor"
-              stroke="var(--color-canvas)"
-              strokeWidth="1.4"
-              strokeLinejoin="round"
-            />
-          </svg>
-          <span className="cursor-chip">{peer.full_name || peer.email}</span>
-        </div>
-      ))}
+      {peers.map((peer) => {
+        const tint = cursorColor(peer.color);
+        // The roster is the authority on names. This is the same value the room
+        // relayed, falling back to the address when nobody ever set one.
+        const label = peer.full_name || peer.email;
+        return (
+          <div
+            key={peer.id}
+            ref={(node) => {
+              if (node) nodes.current.set(peer.id, node);
+              else nodes.current.delete(peer.id);
+            }}
+            className="cursor-mark"
+            style={{ color: tint }}
+          >
+            <svg width="17" height="17" viewBox="0 0 18 18" aria-hidden="true">
+              <path
+                d="M1.5 1.2 L1.5 15.1 L5.3 11.4 L8 16.9 L10.4 15.8 L7.7 10.4 L12.8 10.4 Z"
+                fill="currentColor"
+                stroke="var(--color-canvas)"
+                strokeWidth="1.4"
+                strokeLinejoin="round"
+              />
+            </svg>
+            {/* Painted inline rather than tinted with `currentColor`, which would
+                resolve against this element's own text colour. */}
+            <span className="cursor-chip" style={{ background: tint }}>
+              {label}
+            </span>
+            {/* Always present, faded in by CSS on hover — identifying somebody
+                must not cost a render, and the layer never re-renders for a
+                cursor. Redundant with the roster beside the workspace, so it is
+                inside the `aria-hidden` layer along with the rest of the paint. */}
+            <span className="cursor-detail">
+              <span className="text-[11px] font-semibold text-ink">{label}</span>
+              <span className="text-[10px] text-ink-dim">
+                {peer.full_name && peer.email ? `${peer.role} · ${peer.email}` : peer.role}
+              </span>
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }

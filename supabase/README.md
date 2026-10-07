@@ -91,6 +91,8 @@ Two platform details that cost real time to rediscover:
 | `workspace_locks` | One row per workspace. A 90-second single-editor lease. |
 | `workspace_activity` | Append-only audit log. |
 | `workspace_revisions` | An older workspace-level revision model, alongside the per-project one. |
+| `storage_objects` | **Ours, not the website's.** One row per object in the R2 bucket, keyed by `u/<owner>/self/<sha256>` or `u/<owner>/w/<workspace>/<sha256>`. A null `workspace_id` means private to its owner. |
+| `storage_accounts` | **Ours.** One row per person who has ever uploaded, carrying `quota_bytes` (default 1 GiB). Split out from `storage_objects` so one account can be raised without a migration. |
 
 Two views, both `security_invoker = true` so row-level security applies through
 them: `workspace_overview` (adds the caller's `role` and a `project_count`) and
@@ -105,8 +107,8 @@ calls:
 | --- | --- |
 | `apro_workspace_role(p_workspace_id, p_user_id default auth.uid())` | The single access predicate. Returns `OWNER \| EDITOR \| VIEWER`, or NULL. |
 | `create_shared_workspace(p_name)` | Creates the workspace **and** the caller's OWNER row in one transaction. |
-| `list_workspace_members(p_workspace_id)` | The only reader that can turn `user_id` values into named people. |
-| `invite_workspace_member(p_workspace_id, p_email, p_role)` | Owner only. Resolves the address against an approved member. |
+| `list_workspace_members(p_workspace_id)` | The only reader that can turn `user_id` values into named people. Falls back to `admins.username` / `auth.users.email` for staff. |
+| `invite_workspace_member(p_workspace_id, p_email, p_role)` | Owner only. Resolves the address against an approved member, then against staff in `admins` via `auth.users`. |
 | `respond_to_workspace_invitation(p_invitation_id, p_accept)` | Accept or decline, with the ownership and expiry checks attached. |
 | `update_workspace_member_role(p_workspace_id, p_user_id, p_role)` | Owner only; refuses to touch an OWNER row. |
 | `remove_workspace_member(p_workspace_id, p_user_id)` | Owner only; same refusal. |
@@ -118,6 +120,22 @@ The rest — `create_workspace_project`, `apply_workspace_project_patches`,
 `publish_workspace_project_snapshot`, `acquire_workspace_lock`,
 `renew_workspace_lock`, `release_workspace_lock`, `publish_workspace_revision` —
 belong to the project-data model, which the desktop hub does not use yet.
+
+### The six we added
+
+These came from `supabase/storage/ledger.sql` and exist only for online storage.
+The first four are readable by `authenticated`; the two writers are **`service_role`
+only**, because a client that could write `byte_size` directly could grant itself
+an unlimited allowance.
+
+| Function | Purpose |
+| --- | --- |
+| `apro_storage_quota(p_user_id)` | That person's allowance, falling back to a literal 1 GiB so a read never creates a row. |
+| `apro_storage_used(p_user_id)` | Sum of live `byte_size` across their objects. |
+| `my_storage_summary()` | `{used_bytes, quota_bytes, object_count, shared_count}` for `auth.uid()`. What the homescreen progress bar reads. |
+| `list_workspace_storage(p_workspace_id)` | The objects shared into one workspace. Raises `42501` when the caller is not a member. |
+| `register_storage_object(...)` | **`service_role` only.** Takes a per-user `for update` lock on the account row, refuses anything that would exceed the quota with `23514`, and upserts on `object_key`. |
+| `remove_storage_object(p_object_key)` | **`service_role` only.** Soft-deletes and reports whether a row was retired, which is the Worker's cue to delete the R2 object. |
 
 ## How the schema is shaped, and why
 
@@ -142,13 +160,37 @@ would not.
 
 `workspace_members.user_id` is `NOT NULL` and there is no address column. Coupled
 with `workspace_invitations.invited_user_id` also being `NOT NULL`, this means
-**you cannot invite somebody who has not already signed up and been approved**.
-`invite_workspace_member` resolves the address against the
-`members` table and raises
-`No approved APRO member was found for that email` if there is no match.
+**you cannot invite somebody who has not already signed up**. `invite_workspace_member`
+resolves the address against the `members` table and falls back to staff in
+`admins` (through `auth.users`, since `admins` has no email column), raising
+`No approved APRO account was found for that email` if it matches neither.
 
 That is a real product limitation, not an oversight in the client, and the invite
 form says so rather than pretending otherwise.
+
+### Staff live in a second identity table
+
+This is the thing that makes the two halves of the app disagree, so it is worth
+stating plainly. There are two populations, and they are stored separately:
+
+| | table | key | carries |
+|---|---|---|---|
+| Approved member | `public.members` | `auth_user_id` | `email`, `full_name`, `member_type`, `account_status` |
+| APRO staff | `public.admins` | `auth_id` | `username` only |
+
+Staff are not a flavour of member: the two tables share no key and no row, and
+**most administrators have never had a `members` row at all**. Four of the seven
+`admins` rows had none: `aliarsalan.u6@gmail.com`, `laibakkhuram@gmail.com`,
+`henryarkenberg@gmail.com` and `danishzaryab007@gmail.com`.
+
+Anything that asks "is this person allowed?" must therefore consider both tables.
+`apro_is_approved_member` does, and it is what `create_shared_workspace` gates on;
+`invite_workspace_member` and `list_workspace_members` were taught the same
+fallback so staff can be invited and appear by name in a roster.
+
+RLS supports this without any elevated key: `admins` carries an
+`admins_select_own_row` policy (`auth_id = auth.uid()`), so the hub reads the
+caller's own staff row on the caller's own token.
 
 ### Roles are three, and they are ordered
 
@@ -183,11 +225,41 @@ The hub therefore refreshes its directory on mount, when the window regains focu
 (throttled to one read per five seconds), and after its own mutations. Cursors,
 where immediacy is the entire point, go over the Durable Object instead.
 
+### Online storage is ours, and lives in R2
+
+R2 rather than Supabase Storage, for a reason the numbers make plain: this
+project's free tier gives **1 GB for the whole database**, shared with the live
+website, so "1 GB per user" is not something Supabase can express. R2 gives
+10 GB-month and — the part that matters when a workspace auto-downloads a
+colleague's output — **no egress charge at all**.
+
+The bucket `apro-workspace-storage` is not reachable by any client. Its API is
+S3, which has no notion of a user: shipping bucket credentials inside a desktop
+app would mean one extracted key reads everybody's gigabyte. So every byte goes
+through `cloudflare/workspace-storage`, which derives the key prefix from the
+verified session, checks membership with `apro_workspace_role`, and calls the two
+writer functions under a service-role key that never leaves the Worker. The
+presence room deliberately keeps its no-service-role property; storage is a
+different trust level and gets a different Worker.
+
+Three consequences worth remembering:
+
+- **The key is derived, never supplied.** A client says only *what* to store.
+- **The quota lives in Postgres, not in R2**, which has no per-user accounting.
+  `register_storage_object` takes a `for update` lock on the account row before
+  deciding, without which two simultaneous uploads would both read the old total
+  and both be allowed.
+- **Nothing stored here has meaning.** Which revision is current is a
+  `workspace_projects` question, and the hub does not answer it.
+
 ## Applied changes
 
 | Date | Change | Why |
 | --- | --- | --- |
 | 2026-10-07 | `alter policy shared_workspaces_select_participant … using (apro_workspace_role(id) is not null or exists (select 1 from public.workspace_invitations invitation where invitation.workspace_id = shared_workspaces.id and invitation.invited_user_id = auth.uid() and invitation.status = 'PENDING' and invitation.expires_at > now()))` | The policy read `invitation.workspace_id = invitation.id`, comparing the invitation's workspace to its own id — a tautology that is never true. The invitee branch could therefore never match, so somebody with a pending invitation could not read the workspace they were invited to and an invitation card had no name to show. More restrictive than intended, never a leak. |
+| 2026-10-07 | `apro_is_approved_member` now returns true for a row in `admins` as well as an APPROVED row in `members`; `invite_workspace_member` falls back to `auth.users ⋈ admins` when the address is not an approved member (message reworded to `No approved APRO account was found for that email`); `list_workspace_members` rewritten to use scalar subqueries with `coalesce(members, admins/auth.users)` instead of a single `left join members`. | Four of the seven administrators have no `members` row, so the old predicate answered "no" for them and `create_shared_workspace` refused them with `Only approved APRO members can create workspaces`. Staff could also not be invited and showed up nameless. Purely additive: a PENDING applicant is still refused (verified), and the subquery rewrite removes a latent row fan-out when a `members.auth_user_id` is duplicated. |
+
+| 2026-10-07 | `supabase/storage/ledger.sql`: created `storage_objects` and `storage_accounts` (both RLS-enabled, SELECT-only policies) plus `apro_storage_quota`, `apro_storage_used`, `my_storage_summary`, `list_workspace_storage` for `authenticated`, and `register_storage_object`, `remove_storage_object` for `service_role` alone. | Backing store for per-user online storage in R2, which has no user model, no quota and no membership — all three have to live somewhere, and this is the database the hub already authenticates against. Deliberately additive and deliberately **without a foreign key to `shared_workspaces`**: a cascade would let `purge_expired_workspaces()` delete accounting rows while the R2 objects they describe still exist, and a new constraint on a table we do not own could block the website's own deletes. Fingerprinted before and after — only these 2 tables and 6 functions were added, every pre-existing count identical. |
 
 ## Known hazards
 
@@ -204,4 +276,12 @@ where immediacy is the entire point, go over the Durable Object instead.
   it is advisory: it expires after 90 seconds whether or not the holder is still
   working.
 - **Storage.** Bucket `workspace-files` is private and is purged with its
-  workspace; `apro-products` is public.
+  workspace; `apro-products` is public. R2 bucket `apro-workspace-storage` backs
+  online storage and is **not** purged with a workspace: `storage_objects` has no
+  cascade, by design, so a deleted workspace leaves its shared objects accounted
+  for. Nothing removes them automatically yet.
+- **The R2 bucket is on a different Cloudflare account from the presence room
+  that preceded it.** Both Workers now live on the one account that can hold a
+  billing method. The room was redeployed there rather than migrated, because it
+  holds no durable user data — cursors are in memory and identity lives in the
+  socket attachment.

@@ -9,7 +9,14 @@
 
   // Pinned rather than inferred from whoever happens to be logged in, so a
   // deploy from another machine cannot land in the wrong account.
-  "account_id": "f1749453324fa5f860c33c63fc3a422e",
+  //
+  // This is the account that can hold a billing method, because the other one
+  // cannot — and R2 (and anything else billable) needs that. The room was moved
+  // here as a whole; it holds no durable user data, so nothing was migrated. The
+  // previous deployment at apro-workspace-room.aliarsalan-u6.workers.dev is left
+  // running so that already-released builds, whose fallback URL is baked in, keep
+  // their cursors until they update.
+  "account_id": "1ca3a30a82f07276f864c74dd55b17eb",
 
   // No custom domain yet. workers.dev is enough for a WebSocket fan-out and
   // keeps the deployment to one command.
